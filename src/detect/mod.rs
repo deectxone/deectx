@@ -1,4 +1,5 @@
 pub mod regex;
+pub mod secrets;
 
 use crate::span::Span;
 
