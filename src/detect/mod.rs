@@ -1,3 +1,5 @@
+pub mod regex;
+
 use crate::span::Span;
 
 pub trait Detector: Send + Sync {
