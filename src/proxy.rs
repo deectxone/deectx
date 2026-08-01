@@ -235,30 +235,40 @@ async fn forward_raw(
                 }
             }
             if stream {
-                let masker = st.masker.clone();
-                let sess = session.unwrap_or("").to_string();
-                let reh = Arc::new(Mutex::new(SseRehydrator::new(64)));
-                let reh2 = reh.clone();
-                let masker2 = masker.clone();
-                let sess2 = sess.clone();
-                let byte_stream = up.bytes_stream().map(|r| r.map_err(std::io::Error::other));
-                let rehydrated = byte_stream
-                    .scan((), move |_, chunk| {
-                        futures_util::future::ready(match chunk {
-                            Ok(bytes) => Some(Ok(Bytes::from(
-                                reh.lock().unwrap_or_else(|p| p.into_inner())
-                                    .push(&bytes, &sess, &masker),
-                            ))),
-                            Err(e) => Some(Err(e)),
+                // Mirror the non-stream gzip guard: gzip-like responses stream
+                // through raw. The header check is the meaningful guard here —
+                // the body-based UTF-8 check can't run upfront on a stream, and
+                // feeding compressed bytes through the placeholder rehydrator
+                // would let `pending` grow to O(entire stream) in SseRehydrator.
+                if is_gzip_like_headers(&up_headers) {
+                    let raw = up.bytes_stream().map(|r| r.map_err(std::io::Error::other));
+                    builder.body(Body::from_stream(raw)).unwrap()
+                } else {
+                    let masker = st.masker.clone();
+                    let sess = session.unwrap_or("").to_string();
+                    let reh = Arc::new(Mutex::new(SseRehydrator::new(64)));
+                    let reh2 = reh.clone();
+                    let masker2 = masker.clone();
+                    let sess2 = sess.clone();
+                    let byte_stream = up.bytes_stream().map(|r| r.map_err(std::io::Error::other));
+                    let rehydrated = byte_stream
+                        .scan((), move |_, chunk| {
+                            futures_util::future::ready(match chunk {
+                                Ok(bytes) => Some(Ok(Bytes::from(
+                                    reh.lock().unwrap_or_else(|p| p.into_inner())
+                                        .push(&bytes, &sess, &masker),
+                                ))),
+                                Err(e) => Some(Err(e)),
+                            })
                         })
-                    })
-                    .chain(futures_util::stream::once(futures_util::future::ready(Ok(
-                        Bytes::from(
-                            reh2.lock().unwrap_or_else(|p| p.into_inner())
-                                .finish(&sess2, &masker2),
-                        ),
-                    ))));
-                builder.body(Body::from_stream(rehydrated)).unwrap()
+                        .chain(futures_util::stream::once(futures_util::future::ready(Ok(
+                            Bytes::from(
+                                reh2.lock().unwrap_or_else(|p| p.into_inner())
+                                    .finish(&sess2, &masker2),
+                            ),
+                        ))));
+                    builder.body(Body::from_stream(rehydrated)).unwrap()
+                }
             } else {
                 match up.bytes().await {
                     Ok(bytes) => {
@@ -287,15 +297,21 @@ async fn forward_raw(
     }
 }
 
-/// Rehydration only makes sense for UTF-8 text bodies. Gzip/compressed or
-/// binary bodies are forwarded verbatim to avoid corrupting them.
-fn is_gzip_like(bytes: &[u8], headers: &HeaderMap) -> bool {
+/// True when a content-encoding other than identity is declared. Used by the
+/// streaming path where the body can't be inspected upfront.
+fn is_gzip_like_headers(headers: &HeaderMap) -> bool {
     let ce = headers
         .get("content-encoding")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    ce != "" && ce != "identity" || std::str::from_utf8(bytes).is_err()
+    ce != "" && ce != "identity"
+}
+
+/// Rehydration only makes sense for UTF-8 text bodies. Gzip/compressed or
+/// binary bodies are forwarded verbatim to avoid corrupting them.
+fn is_gzip_like(bytes: &[u8], headers: &HeaderMap) -> bool {
+    is_gzip_like_headers(headers) || std::str::from_utf8(bytes).is_err()
 }
 
 /// Rewrite masked placeholders back to originals in an upstream JSON response.
@@ -371,6 +387,18 @@ fn rehydrate_response(st: &AppState, session: &str, bytes: &[u8], format: ApiFor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gzip_like_headers_guards_streaming_rehydration() {
+        let mut h = HeaderMap::new();
+        assert!(!is_gzip_like_headers(&h), "absent content-encoding is not gzip");
+        h.insert("content-encoding", axum::http::HeaderValue::from_static("identity"));
+        assert!(!is_gzip_like_headers(&h), "identity is not gzip");
+        h.insert("content-encoding", axum::http::HeaderValue::from_static("gzip"));
+        assert!(is_gzip_like_headers(&h), "gzip is gzip");
+        h.insert("content-encoding", axum::http::HeaderValue::from_static("br"));
+        assert!(is_gzip_like_headers(&h), "br is gzip-like");
+    }
 
     #[test]
     fn session_id_is_distinct_for_array_first_messages() {
