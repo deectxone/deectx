@@ -7,3 +7,4 @@ pub mod masker;
 pub mod packs;
 pub mod proxy;
 pub mod span;
+pub mod sse;

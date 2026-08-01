@@ -130,3 +130,50 @@ async fn masks_and_rehydrates_anthropic_messages() {
     assert!(upstream.contains("[EMAIL_1]"), "upstream must see masked email: {upstream}");
     assert!(!upstream.contains("jane.doe@example.com"), "upstream must not see raw email: {upstream}");
 }
+
+#[tokio::test]
+async fn streams_sse_with_split_placeholder_rehydrated() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let up_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 65536];
+        let _ = sock.read(&mut buf).await.unwrap();
+        sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").await.unwrap();
+        sock.flush().await.unwrap();
+        sock.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"hello [EMA").await.unwrap();
+        sock.flush().await.unwrap();
+        sock.write_all(b"IL_1]\"}}]}\n\ndata: [DONE]\n\n").await.unwrap();
+        sock.flush().await.unwrap();
+    });
+
+    let ledger_path = std::env::temp_dir().join(format!("deectx_sse_{}.jsonl", std::process::id()));
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream: format!("http://{up_addr}"),
+        ledger_path,
+        ..Default::default()
+    };
+    let proxy_listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let local = proxy_listener.local_addr().unwrap();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, proxy_listener));
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{local}/v1/chat/completions"))
+        .json(&serde_json::json!({
+            "model": "gpt-4",
+            "stream": true,
+            "messages": [{"role": "user", "content": "my email is jane.doe@example.com"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(resp.headers().get("content-type").map(|v| v.to_str().unwrap().contains("event-stream")).unwrap_or(false),
+        "must preserve event-stream content-type");
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("jane.doe@example.com"), "split placeholder must be rehydrated: {text}");
+    assert!(!text.contains("[EMAIL_1]"), "placeholder leaked into stream: {text}");
+}
