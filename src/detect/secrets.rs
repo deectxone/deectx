@@ -3,21 +3,49 @@ use crate::detect::Detector;
 use regex::Regex;
 use std::collections::HashMap;
 
+pub struct SecretsEntity {
+    pub id: String,
+    pub patterns: Vec<Regex>,
+    pub entropy_min: Option<f64>,
+    pub action: Action,
+}
+
 pub struct SecretsDetector {
-    patterns: Vec<Regex>,
-    bare_token: Regex,
+    entities: Vec<(String, Vec<Regex>, Action)>,
+    entropy: Option<(String, Regex, f64, Action)>,
 }
 
 impl SecretsDetector {
+    pub fn from_entities(entities: Vec<SecretsEntity>) -> Self {
+        let mut out = Self { entities: Vec::new(), entropy: None };
+        for e in entities {
+            if !e.patterns.is_empty() {
+                out.entities.push((e.id.clone(), e.patterns, e.action));
+            }
+            if e.entropy_min.is_some() && out.entropy.is_none() {
+                out.entropy = Some((
+                    e.id.clone(),
+                    Regex::new(r"\b[A-Za-z0-9/+_=.-]{21,}\b").unwrap(),
+                    e.entropy_min.unwrap(),
+                    e.action,
+                ));
+            }
+        }
+        out
+    }
+
+    /// Shim matching M1's hardcoded behavior; replaced by pack wiring in Task 4.
     pub fn new() -> Self {
-        Self {
+        Self::from_entities(vec![SecretsEntity {
+            id: "api_key".into(),
             patterns: vec![
                 Regex::new(r"AKIA[0-9A-Z]{16}").unwrap(),
                 Regex::new(r"ghp_[A-Za-z0-9]{36}").unwrap(),
                 Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").unwrap(),
             ],
-            bare_token: Regex::new(r"\b[A-Za-z0-9/+_=.-]{21,}\b").unwrap(),
-        }
+            entropy_min: Some(4.5),
+            action: Action::Redact,
+        }])
     }
 }
 
@@ -34,14 +62,18 @@ pub(crate) fn shannon_entropy(s: &str) -> f64 {
 impl Detector for SecretsDetector {
     fn detect(&self, text: &str) -> Vec<Span> {
         let mut out = Vec::new();
-        for pat in &self.patterns {
-            for m in pat.find_iter(text) {
-                out.push(Span::new(m.start(), m.end(), "api_key", Action::Redact, m.as_str()));
+        for (id, patterns, action) in &self.entities {
+            for pat in patterns {
+                for m in pat.find_iter(text) {
+                    out.push(Span::new(m.start(), m.end(), id, *action, m.as_str()));
+                }
             }
         }
-        for m in self.bare_token.find_iter(text) {
-            if shannon_entropy(m.as_str()) > 4.5 {
-                out.push(Span::new(m.start(), m.end(), "api_key", Action::Redact, m.as_str()));
+        if let Some((id, re, min, action)) = &self.entropy {
+            for m in re.find_iter(text) {
+                if shannon_entropy(m.as_str()) > *min {
+                    out.push(Span::new(m.start(), m.end(), id, *action, m.as_str()));
+                }
             }
         }
         out
@@ -52,10 +84,22 @@ impl Detector for SecretsDetector {
 mod tests {
     use super::*;
 
+    fn test_detector() -> SecretsDetector {
+        SecretsDetector::from_entities(vec![SecretsEntity {
+            id: "api_key".into(),
+            patterns: vec![
+                Regex::new(r"AKIA[0-9A-Z]{16}").unwrap(),
+                Regex::new(r"ghp_[A-Za-z0-9]{36}").unwrap(),
+                Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").unwrap(),
+            ],
+            entropy_min: Some(4.5),
+            action: Action::Redact,
+        }])
+    }
+
     #[test]
     fn detects_aws_key_as_redact() {
-        let d = SecretsDetector::new();
-        let spans = d.detect("key is AKIAIOSFODNN7EXAMPLE ok");
+        let spans = test_detector().detect("key is AKIAIOSFODNN7EXAMPLE ok");
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].entity, "api_key");
         assert!(matches!(spans[0].action, Action::Redact));
@@ -69,7 +113,20 @@ mod tests {
 
     #[test]
     fn ignores_low_entropy_long_words() {
-        let d = SecretsDetector::new();
-        assert!(d.detect("say AAAAAAAAAAAAAAAAAAAAAAAA aloud").is_empty());
+        assert!(test_detector().detect("say AAAAAAAAAAAAAAAAAAAAAAAA aloud").is_empty());
+    }
+
+    #[test]
+    fn entropy_scan_only_runs_when_entity_sets_entropy_min() {
+        let d = SecretsDetector::from_entities(vec![SecretsEntity {
+            id: "gh_token".into(),
+            patterns: vec![Regex::new(r"ghp_[A-Za-z0-9]{36}").unwrap()],
+            entropy_min: None,
+            action: Action::Redact,
+        }]);
+        // 21+ char bare token with high entropy is NOT flagged without entropy_min
+        assert!(d.detect("token x9Kf2mQ8vLp3nR7sW1yZ4bN6cD").is_empty());
+        // explicit pattern still fires
+        assert_eq!(d.detect("ghp_abcdefghijklmnopqrstuvwxyz0123456789").len(), 1);
     }
 }
