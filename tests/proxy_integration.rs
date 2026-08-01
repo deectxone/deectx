@@ -15,7 +15,7 @@ fn mock_upstream() -> (String, Arc<Mutex<String>>) {
         let req = String::from_utf8_lossy(&buf[..n]).to_string();
         let body = req.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
         *received2.lock().unwrap() = body;
-        let resp_body = r#"{"id":"chatcmpl-1","choices":[{"message":{"content":"ok, sending report to [EMAIL_1]"}}]}"#;
+        let resp_body = r#"{"id":"chatcmpl-1","choices":[{"message":{"content":"ok, sending report to [EMAIL_1]","tool_calls":[{"id":"call_1","type":"function","function":{"name":"send_report","arguments":"{\"email\":\"[EMAIL_1]\"}"}}]}}]}"#;
         let resp = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
             resp_body.len(), resp_body
@@ -51,6 +51,10 @@ async fn masks_email_before_forwarding() {
     let resp_body = resp.text().await.unwrap();
     assert!(resp_body.contains("jane.doe@example.com"),
             "placeholder was not rehydrated in response: {}", resp_body);
+    let resp_json: serde_json::Value = serde_json::from_str(&resp_body).unwrap();
+    let args = resp_json["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"].as_str().unwrap();
+    assert!(args.contains("jane.doe@example.com"),
+            "tool_calls arguments were not rehydrated: {}", args);
     assert!(!resp_body.contains("[EMAIL_1]"),
             "masked placeholder leaked to client: {}", resp_body);
 
