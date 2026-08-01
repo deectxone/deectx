@@ -1,0 +1,5 @@
+name: email_multiple
+text: "send to a@x.com and b@x.com"
+expected:
+  - { entity: email, text: "a@x.com" }
+  - { entity: email, text: "b@x.com" }

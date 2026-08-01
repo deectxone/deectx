@@ -1,0 +1,4 @@
+name: aws_key
+text: "AKIAIOSFODNN7EXAMPLE"
+expected:
+  - { entity: api_key, text: "AKIAIOSFODNN7EXAMPLE" }

@@ -1,0 +1,6 @@
+name: mixed
+text: "user jane.doe@example.com card 4111 1111 1111 1111 key AKIAIOSFODNN7EXAMPLE"
+expected:
+  - { entity: email, text: "jane.doe@example.com" }
+  - { entity: credit_card, text: "4111 1111 1111 1111" }
+  - { entity: api_key, text: "AKIAIOSFODNN7EXAMPLE" }

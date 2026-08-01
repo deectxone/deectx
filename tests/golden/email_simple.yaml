@@ -1,0 +1,4 @@
+name: email_simple
+text: "contact jane.doe@example.com for access"
+expected:
+  - { entity: email, text: "jane.doe@example.com" }
