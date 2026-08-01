@@ -3,6 +3,10 @@ name = "deectx"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+ner = ["dep:ort", "dep:ndarray", "dep:tokenizers"]
+
 [dependencies]
 anyhow = "1"
 axum = "0.7"
@@ -18,3 +22,11 @@ tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+ort = { version = "2.0.0-rc.13", optional = true, features = ["load-dynamic", "ndarray"] }
+ndarray = { version = "0.17", optional = true }
+tokenizers = { version = "0.20", optional = true }
+
+[[bin]]
+name = "ner_spike"
+path = "src/bin/ner_spike.rs"
+required-features = ["ner"]
