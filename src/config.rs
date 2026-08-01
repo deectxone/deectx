@@ -19,6 +19,8 @@ pub struct Config {
     pub allowlist: Vec<String>,
     #[serde(default)]
     pub ner: bool,
+    #[serde(default)]
+    pub upstream_anthropic: Option<String>,
 }
 
 fn default_listen() -> String { "127.0.0.1:8787".into() }
@@ -27,7 +29,7 @@ fn default_ledger() -> PathBuf { PathBuf::from("./ledger.jsonl") }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { listen: default_listen(), upstream: default_upstream(), ledger_path: default_ledger(), active_packs: Vec::new(), packs_dir: None, model_dir: None, allowlist: Vec::new(), ner: false }
+        Self { listen: default_listen(), upstream: default_upstream(), ledger_path: default_ledger(), active_packs: Vec::new(), packs_dir: None, model_dir: None, allowlist: Vec::new(), ner: false, upstream_anthropic: None }
     }
 }
 

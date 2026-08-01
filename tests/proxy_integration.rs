@@ -69,3 +69,64 @@ async fn masks_email_before_forwarding() {
     assert!(ledger.contains("\"email\""));
     assert!(!ledger.contains("jane.doe@example.com"));
 }
+
+/// Spawn a one-shot mock upstream on an ephemeral port; returns (addr, received_body).
+async fn mock_upstream_anthropic() -> (std::net::SocketAddr, Arc<Mutex<String>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let body_seen = Arc::new(Mutex::new(String::new()));
+    let seen = body_seen.clone();
+    tokio::spawn(async move {
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 65536];
+        let n = sock.read(&mut buf).await.unwrap();
+        let req = String::from_utf8_lossy(&buf[..n]).to_string();
+        let idx = req.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+        *seen.lock().unwrap() = req[idx..].to_string();
+        let resp_body = r#"{"content":[{"type":"text","text":"ok, sending report to [EMAIL_1]"}],"stop_reason":"end_turn","model":"claude-3-7-sonnet"}"#;
+        let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", resp_body.len(), resp_body);
+        sock.write_all(resp.as_bytes()).await.unwrap();
+    });
+    (addr, body_seen)
+}
+
+#[tokio::test]
+async fn masks_and_rehydrates_anthropic_messages() {
+    let (up_addr, seen) = mock_upstream_anthropic().await;
+    let ledger_path = std::env::temp_dir().join(format!("deectx_an_{}.jsonl", std::process::id()));
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream: format!("http://{up_addr}"),
+        ledger_path,
+        upstream_anthropic: Some(format!("http://{up_addr}")),
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{local}/v1/messages"))
+        .header("x-api-key", "test-key")
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({
+            "model": "claude-3-7-sonnet",
+            "max_tokens": 64,
+            "system": "contact jane.doe@example.com",
+            "messages": [{"role": "user", "content": "my email is jane.doe@example.com"}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let text = resp.text().await.unwrap();
+    assert!(text.contains("jane.doe@example.com"), "response must be rehydrated: {text}");
+    assert!(!text.contains("[EMAIL_1]"), "placeholder leaked: {text}");
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let upstream = seen.lock().unwrap().clone();
+    assert!(upstream.contains("[EMAIL_1]"), "upstream must see masked email: {upstream}");
+    assert!(!upstream.contains("jane.doe@example.com"), "upstream must not see raw email: {upstream}");
+}
