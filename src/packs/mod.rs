@@ -1,0 +1,127 @@
+use crate::span::Action;
+use anyhow::Result;
+use std::path::Path;
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Pack {
+    pub name: String,
+    #[serde(default = "default_version")]
+    pub version: String,
+    #[serde(default)]
+    pub entities: Vec<PackEntity>,
+    #[serde(default)]
+    pub settings: PackSettings,
+}
+
+fn default_version() -> String { "0.1.0".into() }
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PackEntity {
+    pub id: String,
+    #[serde(default)]
+    pub detector: String, // "regex" | "secrets" | "ner"
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub pattern: Option<String>,
+    #[serde(default)]
+    pub patterns: Vec<String>,
+    #[serde(default)]
+    pub checksum: Option<String>, // "luhn"
+    #[serde(default)]
+    pub entropy_min: Option<f64>,
+    #[serde(default)]
+    pub action: Action,
+    #[serde(default)]
+    pub alert: bool,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackSettings {
+    #[serde(default)]
+    pub fail_closed: bool,
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+impl Pack {
+    pub fn builtin_default() -> Pack {
+        serde_yaml::from_str(include_str!("default.yaml"))
+            .expect("built-in default.yaml must parse")
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path)?;
+        Ok(serde_yaml::from_str(&text)?)
+    }
+
+    pub fn load_dir(dir: &Path) -> Result<Vec<Pack>> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.extension().map(|e| e == "yaml").unwrap_or(false) {
+                match Pack::load(&path) {
+                    Ok(p) => out.push(p),
+                    Err(e) => tracing::warn!("skipping pack {}: {e}", path.display()),
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_builtin_default_pack() {
+        let p = Pack::builtin_default();
+        assert_eq!(p.name, "default");
+        assert_eq!(p.entities.len(), 3);
+        assert!(!p.settings.fail_closed);
+    }
+
+    #[test]
+    fn load_round_trips_sample_yaml() {
+        let dir = std::env::temp_dir().join(format!("deectx_pack_{}.yaml", std::process::id()));
+        std::fs::write(&dir,
+r#"name: sample
+version: 0.1.0
+entities:
+  - id: phone
+    detector: regex
+    pattern: '\+?\d{10,15}'
+    action: mask
+  - id: medical
+    detector: ner
+    labels: [health, medical_condition]
+    action: mask
+    alert: true
+settings:
+  failClosed: true
+  allow: ["info@example.com"]
+"#).unwrap();
+        let p = Pack::load(&dir).unwrap();
+        assert_eq!(p.name, "sample");
+        assert_eq!(p.entities.len(), 2);
+        assert!(p.settings.fail_closed);
+        assert_eq!(p.settings.allow, vec!["info@example.com"]);
+        let med = &p.entities[1];
+        assert!(med.alert);
+        assert_eq!(med.labels, vec!["health", "medical_condition"]);
+        assert!(med.pattern.is_none());
+    }
+
+    #[test]
+    fn entities_default_to_mask_false_and_no_checksum() {
+        let yaml = "name: minimal\nentities:\n  - id: x\n    detector: regex\n    pattern: 'x'\n";
+        let p: Pack = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(p.entities[0].action, Action::Mask);
+        assert!(!p.entities[0].alert);
+        assert!(p.entities[0].labels.is_empty());
+        assert!(p.entities[0].checksum.is_none());
+        assert!(p.entities[0].patterns.is_empty());
+    }
+}
