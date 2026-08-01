@@ -92,6 +92,12 @@ async fn handle_completion(
     body: Bytes,
     format: ApiFormat,
 ) -> Response {
+    let start = std::time::Instant::now();
+    let tool = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
     let mut json: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(j) => j,
         Err(_) => return forward_raw(&st, format, headers, body, None, false).await,
@@ -121,24 +127,24 @@ async fn handle_completion(
             }
         }
     }
+    let stream = json.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let out = serde_json::to_vec(&json).unwrap_or_else(|_| body.to_vec());
+    let resp = forward_raw(&st, format, headers, Bytes::from(out), Some(&session), stream).await;
+    // Streaming latency is measured in Task 3; non-stream requests buffer the
+    // full body in forward_raw, so elapsed() here is the true request latency.
+    let latency_ms = if stream { 0 } else { start.elapsed().as_millis() };
     let entry = LedgerEntry {
         ts: Utc::now(),
-        tool: headers
-            .get("user-agent")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown")
-            .to_string(),
+        tool,
         session: session.clone(),
         events,
-        latency_ms: 0,
+        latency_ms,
         packs: st.packs.clone(),
     };
     if let Err(e) = st.ledger.append(&entry) {
         tracing::warn!("ledger append failed: {e}");
     }
-    let stream = json.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
-    let out = serde_json::to_vec(&json).unwrap_or_else(|_| body.to_vec());
-    forward_raw(&st, format, headers, Bytes::from(out), Some(&session), stream).await
+    resp
 }
 
 fn mask_walk(
