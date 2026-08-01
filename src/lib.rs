@@ -1,4 +1,5 @@
 pub mod allowlist;
+pub mod chunk;
 pub mod config;
 pub mod detect;
 pub mod ledger;
