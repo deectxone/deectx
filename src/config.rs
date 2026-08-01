@@ -9,6 +9,10 @@ pub struct Config {
     pub upstream: String,
     #[serde(default = "default_ledger")]
     pub ledger_path: PathBuf,
+    #[serde(default)]
+    pub active_packs: Vec<String>,
+    #[serde(default)]
+    pub packs_dir: Option<PathBuf>,
 }
 
 fn default_listen() -> String { "127.0.0.1:8787".into() }
@@ -17,7 +21,7 @@ fn default_ledger() -> PathBuf { PathBuf::from("./ledger.jsonl") }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { listen: default_listen(), upstream: default_upstream(), ledger_path: default_ledger() }
+        Self { listen: default_listen(), upstream: default_upstream(), ledger_path: default_ledger(), active_packs: Vec::new(), packs_dir: None }
     }
 }
 

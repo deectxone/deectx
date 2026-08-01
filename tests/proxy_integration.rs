@@ -36,6 +36,7 @@ async fn masks_email_before_forwarding() {
         listen: "127.0.0.1:0".into(),
         upstream: upstream.clone(),
         ledger_path: ledger_path.clone(),
+        ..Default::default()
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

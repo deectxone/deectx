@@ -1,5 +1,8 @@
+use crate::config::Config;
+use crate::detect::{regex::{RegexDetector, RegexEntity}, secrets::{SecretsDetector, SecretsEntity}, DetectorChain};
 use crate::span::Action;
 use anyhow::Result;
+use regex::Regex;
 use std::path::Path;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -69,6 +72,67 @@ impl Pack {
         }
         Ok(out)
     }
+}
+
+impl Pack {
+    pub fn regex_entities(&self) -> Vec<RegexEntity> {
+        self.entities.iter()
+            .filter(|e| e.detector == "regex")
+            .filter_map(|e| {
+                let pattern = Regex::new(e.pattern.as_deref()?).ok()?;
+                Some(RegexEntity {
+                    id: e.id.clone(),
+                    pattern,
+                    action: e.action,
+                    luhn: e.checksum.as_deref() == Some("luhn"),
+                })
+            })
+            .collect()
+    }
+
+    pub fn secrets_entities(&self) -> Vec<SecretsEntity> {
+        self.entities.iter()
+            .filter(|e| e.detector == "secrets")
+            .filter_map(|e| {
+                let mut patterns = Vec::new();
+                if let Some(p) = &e.pattern {
+                    if let Ok(r) = Regex::new(p) { patterns.push(r); }
+                }
+                for p in &e.patterns {
+                    if let Ok(r) = Regex::new(p) { patterns.push(r); }
+                }
+                Some(SecretsEntity {
+                    id: e.id.clone(),
+                    patterns,
+                    entropy_min: e.entropy_min,
+                    action: e.action,
+                })
+            })
+            .collect()
+    }
+}
+
+pub fn build_chain(packs: &[Pack]) -> DetectorChain {
+    let regex: Vec<RegexEntity> = packs.iter().flat_map(|p| p.regex_entities()).collect();
+    let secrets: Vec<SecretsEntity> = packs.iter().flat_map(|p| p.secrets_entities()).collect();
+    DetectorChain::new(vec![
+        Box::new(RegexDetector::from_entities(regex)),
+        Box::new(SecretsDetector::from_entities(secrets)),
+    ])
+}
+
+pub fn load_active(cfg: &Config) -> Vec<Pack> {
+    let mut packs = vec![Pack::builtin_default()];
+    if let Some(dir) = &cfg.packs_dir {
+        if let Ok(loaded) = Pack::load_dir(dir) {
+            for p in loaded {
+                if cfg.active_packs.is_empty() || cfg.active_packs.contains(&p.name) {
+                    packs.push(p);
+                }
+            }
+        }
+    }
+    packs
 }
 
 #[cfg(test)]

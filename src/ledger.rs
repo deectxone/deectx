@@ -21,6 +21,7 @@ pub struct LedgerEntry {
     pub session: String,
     pub events: Vec<LedgerEvent>,
     pub latency_ms: u128,
+    pub packs: Vec<String>,
 }
 
 pub struct Ledger {
@@ -66,6 +67,7 @@ mod tests {
                 action: "mask".into(),
             }],
             latency_ms: 3,
+            packs: vec!["default".into()],
         };
         ledger.append(&entry).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
