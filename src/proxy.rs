@@ -32,7 +32,7 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
     let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(&cfg, &packs));
     let state = Arc::new(AppState {
         upstream: cfg.upstream.trim_end_matches('/').to_string(),
-        chain: packs::build_chain(&packs, cfg.ner),
+        chain: packs::build_chain(&packs, cfg.ner, cfg.model_dir.clone().unwrap_or_else(|| std::path::PathBuf::from("./models"))),
         masker: Masker::new(),
         ledger: Ledger::new(cfg.ledger_path)?,
         http: reqwest::Client::new(),

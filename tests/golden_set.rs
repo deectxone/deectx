@@ -33,7 +33,7 @@ fn load_fixtures() -> Vec<Fixture> {
 
 #[test]
 fn golden_set_precision_recall_gate() {
-    let chain = build_chain(&[Pack::builtin_default()], false);
+    let chain = build_chain(&[Pack::builtin_default()], false, std::path::PathBuf::from("./models"));
     let mut tp = 0usize;
     let mut fp = 0usize;
     let mut fn_count = 0usize;

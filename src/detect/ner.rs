@@ -9,8 +9,11 @@ pub struct NerDetector {
 }
 
 impl NerDetector {
-    pub fn new(_model_dir: PathBuf, labels: Vec<(String, Action)>) -> Self {
+    pub fn new(model_dir: PathBuf, labels: Vec<(String, Action)>) -> Self {
         // Model load is best-effort; failure degrades to empty detection (fail-open).
+        if !labels.is_empty() {
+            tracing::warn!("NerDetector is not yet wired to load a model (model_dir={:?}); NER detection is a no-op", model_dir);
+        }
         Self { session: None, labels }
     }
 }
@@ -67,7 +70,7 @@ mod tests {
         };
         // NerDetector is constructed from the "ner" entity but has no session,
         // so the chain must still run and return no spans (fail-open).
-        let chain = build_chain(&[pack], true);
+        let chain = build_chain(&[pack], true, PathBuf::from("./models"));
         assert!(chain.detect("John Smith lives in Sydney").is_empty());
     }
 }
