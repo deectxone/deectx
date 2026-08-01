@@ -4,18 +4,20 @@ use crate::ledger::{sha256_hex, Ledger, LedgerEntry, LedgerEvent};
 use crate::masker::Masker;
 use crate::packs;
 use crate::span::Action;
+use crate::sse::SseRehydrator;
 use anyhow::Result;
 use axum::body::Body;
 use axum::{body::Bytes, extract::State, http::HeaderMap, response::Response, Router};
 use chrono::Utc;
-use std::sync::Arc;
+use futures_util::StreamExt;
+use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
 struct AppState {
     upstream: String,
     anthropic_upstream: String,
     chain: DetectorChain,
-    masker: Masker,
+    masker: std::sync::Arc<Masker>,
     ledger: Ledger,
     http: reqwest::Client,
     packs: Vec<String>,
@@ -46,7 +48,7 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
         upstream: cfg.upstream.trim_end_matches('/').to_string(),
         anthropic_upstream,
         chain: packs::build_chain(&packs, cfg.ner, cfg.model_dir.clone().unwrap_or_else(|| std::path::PathBuf::from("./models"))),
-        masker: Masker::new(),
+        masker: std::sync::Arc::new(Masker::new()),
         ledger: Ledger::new(cfg.ledger_path)?,
         http: reqwest::Client::new(),
         packs: pack_names,
@@ -203,7 +205,7 @@ async fn forward_raw(
     headers: HeaderMap,
     body: Bytes,
     session: Option<&str>,
-    _stream: bool,
+    stream: bool,
 ) -> Response {
     let base = match format {
         ApiFormat::OpenAI => &st.upstream,
@@ -232,23 +234,49 @@ async fn forward_raw(
                     builder = builder.header(k, v);
                 }
             }
-            // NOTE: `stream` handling lands in Task 3. For now, always buffer.
-            match up.bytes().await {
-                Ok(bytes) => {
-                    let body_bytes = if let Some(sess) = session {
-                        if is_gzip_like(&bytes, &up_headers) {
-                            bytes.to_vec()
+            if stream {
+                let masker = st.masker.clone();
+                let sess = session.unwrap_or("").to_string();
+                let reh = Arc::new(Mutex::new(SseRehydrator::new(64)));
+                let reh2 = reh.clone();
+                let masker2 = masker.clone();
+                let sess2 = sess.clone();
+                let byte_stream = up.bytes_stream().map(|r| r.map_err(std::io::Error::other));
+                let rehydrated = byte_stream
+                    .scan((), move |_, chunk| {
+                        futures_util::future::ready(match chunk {
+                            Ok(bytes) => Some(Ok(Bytes::from(
+                                reh.lock().unwrap_or_else(|p| p.into_inner())
+                                    .push(&bytes, &sess, &masker),
+                            ))),
+                            Err(e) => Some(Err(e)),
+                        })
+                    })
+                    .chain(futures_util::stream::once(futures_util::future::ready(Ok(
+                        Bytes::from(
+                            reh2.lock().unwrap_or_else(|p| p.into_inner())
+                                .finish(&sess2, &masker2),
+                        ),
+                    ))));
+                builder.body(Body::from_stream(rehydrated)).unwrap()
+            } else {
+                match up.bytes().await {
+                    Ok(bytes) => {
+                        let body_bytes = if let Some(sess) = session {
+                            if is_gzip_like(&bytes, &up_headers) {
+                                bytes.to_vec()
+                            } else {
+                                rehydrate_response(st, sess, &bytes, format)
+                            }
                         } else {
-                            rehydrate_response(st, sess, &bytes, format)
-                        }
-                    } else {
-                        bytes.to_vec()
-                    };
-                    builder.body(Body::from(body_bytes)).unwrap()
-                }
-                Err(e) => {
-                    tracing::warn!("upstream read error: {e}");
-                    builder.status(502).body(Body::from("upstream read error")).unwrap()
+                            bytes.to_vec()
+                        };
+                        builder.body(Body::from(body_bytes)).unwrap()
+                    }
+                    Err(e) => {
+                        tracing::warn!("upstream read error: {e}");
+                        builder.status(502).body(Body::from("upstream read error")).unwrap()
+                    }
                 }
             }
         }
