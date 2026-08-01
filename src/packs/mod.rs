@@ -85,7 +85,12 @@ impl Pack {
                         id: e.id.clone(),
                         pattern,
                         action: e.action,
-                        luhn: e.checksum.as_deref() == Some("luhn"),
+                        checksum: match e.checksum.as_deref() {
+                            Some("luhn") => Some(crate::detect::regex::Checksum::Luhn),
+                            Some("mod97") => Some(crate::detect::regex::Checksum::Mod97),
+                            Some("ato_tfn") => Some(crate::detect::regex::Checksum::AtoTfn),
+                            _ => None,
+                        },
                     }),
                     Err(err) => {
                         tracing::warn!("pack entity {} has invalid regex: {err}", e.id);
