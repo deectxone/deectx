@@ -36,7 +36,7 @@ impl Ledger {
     pub fn append(&self, entry: &LedgerEntry) -> io::Result<()> {
         let mut line = serde_json::to_string(entry).map_err(io::Error::other)?;
         line.push('\n');
-        self.file.lock().unwrap().write_all(line.as_bytes())
+        self.file.lock().unwrap_or_else(|p| p.into_inner()).write_all(line.as_bytes())
     }
 }
 

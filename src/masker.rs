@@ -18,7 +18,7 @@ impl Masker {
     }
 
     pub fn mask_text(&self, session: &str, text: &str, spans: &[Span]) -> String {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         let map = sessions.entry(session.to_string()).or_default();
         let mut out = text.to_string();
 
@@ -56,7 +56,7 @@ impl Masker {
     /// Resolve the placeholder previously assigned to `original` text in this
     /// session, if any. Returns None for redacted secrets (never stored).
     pub fn placeholder_for(&self, session: &str, original: &str) -> Option<String> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         sessions.get(session).and_then(|m| m.by_original.get(original)).cloned()
     }
 
@@ -65,7 +65,7 @@ impl Masker {
     /// before `[EMAIL_1]` (no substring corruption). Redacted secrets have no
     /// mapping and stay as `[REDACTED_SECRET]`.
     pub fn rehydrate(&self, session: &str, text: &str) -> String {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
         let mut pairs: Vec<(&String, &String)> = Vec::new();
         if let Some(map) = sessions.get(session) {
             pairs.extend(map.by_original.iter().map(|(o, p)| (p, o)));

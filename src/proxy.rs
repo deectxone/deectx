@@ -37,8 +37,13 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
 }
 
 fn session_id(body: &serde_json::Value) -> String {
-    let first = body["messages"][0]["content"].as_str().unwrap_or("");
-    format!("s_{}", &sha256_hex(first)[..8])
+    let first = &body["messages"][0]["content"];
+    let seed = match first {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(_) => first.to_string(),
+        _ => String::new(),
+    };
+    format!("s_{}", &sha256_hex(&seed)[..8])
 }
 
 async fn handle_chat(State(st): State<Arc<AppState>>, headers: HeaderMap, body: Bytes) -> Response {
@@ -114,16 +119,26 @@ async fn forward_raw(st: &AppState, headers: &HeaderMap, body: Bytes, session: O
     }
     match req.send().await {
         Ok(up) => {
-            let mut resp = Response::builder().status(up.status());
-            for (k, v) in up.headers() {
-                if k != "content-length" {
+            let up_headers = up.headers().clone();
+            let status = up.status();
+            let bytes = match up.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!("upstream body read error: {e}");
+                    return Response::builder().status(502)
+                        .body(axum::body::Body::from("upstream read error"))
+                        .unwrap();
+                }
+            };
+            let mut resp = Response::builder().status(status);
+            for (k, v) in &up_headers {
+                if k != "content-length" && k != "transfer-encoding" {
                     resp = resp.header(k, v);
                 }
             }
-            let bytes = up.bytes().await.unwrap_or_default();
             let body: Vec<u8> = match session {
-                Some(sess) => rehydrate_response(st, sess, &bytes),
-                None => bytes.to_vec(),
+                Some(sess) if !is_gzip_like(&bytes, &up_headers) => rehydrate_response(st, sess, &bytes),
+                _ => bytes.to_vec(),
             };
             resp.body(axum::body::Body::from(body)).unwrap()
         }
@@ -134,10 +149,23 @@ async fn forward_raw(st: &AppState, headers: &HeaderMap, body: Bytes, session: O
     }
 }
 
+/// Rehydration only makes sense for UTF-8 text bodies. Gzip/compressed or
+/// binary bodies are forwarded verbatim to avoid corrupting them.
+fn is_gzip_like(bytes: &[u8], headers: &HeaderMap) -> bool {
+    let ce = headers
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    ce != "" && ce != "identity" || std::str::from_utf8(bytes).is_err()
+}
+
 /// Rewrite masked placeholders back to originals in an upstream JSON response.
-/// Walks choices[].message.content and choices[].delta.content. If the body is
-/// not valid JSON, falls back to a raw placeholder->original replace so
-/// plain-text / partially-broken streams are still best-effort rehydrated.
+/// Walks choices[].message.content, choices[].message.tool_calls,
+/// choices[].delta.content and choices[].delta.tool_calls, then runs a raw
+/// placeholder->original pass over the re-serialized JSON. If the body is not
+/// valid JSON, falls back to a raw placeholder->original replace so plain-text
+/// or partially-broken streams are still best-effort rehydrated.
 fn rehydrate_response(st: &AppState, session: &str, bytes: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(bytes);
     match serde_json::from_str::<serde_json::Value>(&text) {
@@ -148,14 +176,49 @@ fn rehydrate_response(st: &AppState, session: &str, bytes: &[u8]) -> Vec<u8> {
                         c["message"]["content"] =
                             serde_json::Value::String(st.masker.rehydrate(session, content));
                     }
+                    if let Some(tool_calls) = c["message"]["tool_calls"].as_array_mut() {
+                        for tc in tool_calls {
+                            if let Some(args) = tc["function"]["arguments"].as_str() {
+                                tc["function"]["arguments"] =
+                                    serde_json::Value::String(st.masker.rehydrate(session, args));
+                            }
+                        }
+                    }
                     if let Some(content) = c["delta"]["content"].as_str() {
                         c["delta"]["content"] =
                             serde_json::Value::String(st.masker.rehydrate(session, content));
                     }
+                    if let Some(tool_calls) = c["delta"]["tool_calls"].as_array_mut() {
+                        for tc in tool_calls {
+                            if let Some(args) = tc["function"]["arguments"].as_str() {
+                                tc["function"]["arguments"] =
+                                    serde_json::Value::String(st.masker.rehydrate(session, args));
+                            }
+                        }
+                    }
                 }
             }
-            serde_json::to_vec(&v).unwrap_or_else(|_| bytes.to_vec())
+            match serde_json::to_vec(&v) {
+                Ok(serialized) => {
+                    let serialized = String::from_utf8_lossy(&serialized);
+                    st.masker.rehydrate(session, &serialized).into_bytes()
+                }
+                Err(_) => bytes.to_vec(),
+            }
         }
         Err(_) => st.masker.rehydrate(session, &text).into_bytes(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_id_is_distinct_for_array_first_messages() {
+        let a = serde_json::json!({"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]});
+        let b = serde_json::json!({"messages":[{"role":"user","content":[{"type":"text","text":"world"}]}]});
+        assert_ne!(session_id(&a), session_id(&b));
+        assert!(session_id(&a).starts_with("s_"));
     }
 }
