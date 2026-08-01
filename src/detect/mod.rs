@@ -1,5 +1,7 @@
 pub mod regex;
 pub mod secrets;
+#[cfg(feature = "ner")]
+pub mod ner;
 
 use crate::span::Span;
 

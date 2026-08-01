@@ -1,9 +1,11 @@
 use crate::config::Config;
-use crate::detect::{regex::{RegexDetector, RegexEntity}, secrets::{SecretsDetector, SecretsEntity}, DetectorChain};
+use crate::detect::{regex::{RegexDetector, RegexEntity}, secrets::{SecretsDetector, SecretsEntity}, Detector, DetectorChain};
 use crate::span::Action;
 use anyhow::Result;
 use regex::Regex;
 use std::path::Path;
+#[cfg(feature = "ner")]
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Pack {
@@ -112,13 +114,31 @@ impl Pack {
     }
 }
 
-pub fn build_chain(packs: &[Pack]) -> DetectorChain {
+pub fn build_chain(packs: &[Pack], ner_enabled: bool) -> DetectorChain {
+    #[cfg(not(feature = "ner"))]
+    let _ = ner_enabled; // feature-off: NER never wired, silence unused param
     let regex: Vec<RegexEntity> = packs.iter().flat_map(|p| p.regex_entities()).collect();
     let secrets: Vec<SecretsEntity> = packs.iter().flat_map(|p| p.secrets_entities()).collect();
-    DetectorChain::new(vec![
+    let mut detectors: Vec<Box<dyn Detector>> = vec![
         Box::new(RegexDetector::from_entities(regex)),
         Box::new(SecretsDetector::from_entities(secrets)),
-    ])
+    ];
+    #[cfg(feature = "ner")]
+    if ner_enabled {
+        detectors.push(Box::new(crate::detect::ner::NerDetector::new(
+            PathBuf::from("./models"),
+            packs.iter().flat_map(ner_labels).collect(),
+        )));
+    }
+    DetectorChain::new(detectors)
+}
+
+#[cfg(feature = "ner")]
+fn ner_labels(pack: &Pack) -> Vec<(String, Action)> {
+    pack.entities.iter()
+        .filter(|e| e.detector == "ner")
+        .map(|e| (e.id.clone(), e.action))
+        .collect()
 }
 
 pub fn load_active(cfg: &Config) -> Vec<Pack> {
