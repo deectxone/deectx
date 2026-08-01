@@ -1,0 +1,62 @@
+name: gdpr
+version: 0.1.0
+entities:
+  - id: person
+    detector: ner
+    labels: [person, name]
+    action: mask
+  - id: address
+    detector: ner
+    labels: [street_address, address]
+    action: mask
+  - id: art9_health
+    detector: ner
+    labels: [medical_condition, health_data]
+    action: mask
+    alert: true
+  - id: art9_biometric
+    detector: ner
+    labels: [biometric_data]
+    action: mask
+    alert: true
+  - id: art9_racial_ethnic
+    detector: ner
+    labels: [racial_or_ethnic_origin]
+    action: mask
+    alert: true
+  - id: art9_religious
+    detector: ner
+    labels: [religious_or_philosophical_belief]
+    action: mask
+    alert: true
+  - id: art9_political
+    detector: ner
+    labels: [political_opinion]
+    action: mask
+    alert: true
+  - id: art9_trade_union
+    detector: ner
+    labels: [trade_union_membership]
+    action: mask
+    alert: true
+  - id: art9_sex_life
+    detector: ner
+    labels: [sex_life_or_sexual_orientation]
+    action: mask
+    alert: true
+  - id: email
+    detector: regex
+    pattern: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
+    action: mask
+  - id: phone
+    detector: regex
+    pattern: '\+?\d[\d\s\-.]{7,17}\d'
+    action: mask
+  - id: iban
+    detector: regex
+    pattern: '\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}\b'
+    checksum: mod97
+    action: mask
+settings:
+  failClosed: false
+  allow: []

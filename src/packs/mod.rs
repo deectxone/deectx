@@ -55,6 +55,16 @@ impl Pack {
             .expect("built-in default.yaml must parse")
     }
 
+    pub fn builtin_pack(name: &str) -> Option<Pack> {
+        let yaml = match name {
+            "default" => include_str!("default.yaml"),
+            "gdpr" => include_str!("gdpr.yaml"),
+            "cdr-au" => include_str!("cdr-au.yaml"),
+            _ => return None,
+        };
+        serde_yaml::from_str(yaml).ok()
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)?;
         Ok(serde_yaml::from_str(&text)?)
@@ -166,20 +176,32 @@ fn ner_labels(pack: &Pack) -> Vec<(String, Action)> {
 }
 
 pub fn load_active(cfg: &Config) -> Vec<Pack> {
-    let mut packs = vec![Pack::builtin_default()];
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut push = |p: Pack, out: &mut Vec<Pack>, seen: &mut std::collections::HashSet<String>| {
+        if seen.insert(p.name.clone()) {
+            out.push(p);
+        }
+    };
+    push(Pack::builtin_default(), &mut out, &mut seen);
+    for name in &cfg.active_packs {
+        if let Some(p) = Pack::builtin_pack(name) {
+            push(p, &mut out, &mut seen);
+        }
+    }
     if let Some(dir) = &cfg.packs_dir {
         match Pack::load_dir(dir) {
             Ok(loaded) => {
                 for p in loaded {
                     if cfg.active_packs.is_empty() || cfg.active_packs.contains(&p.name) {
-                        packs.push(p);
+                        push(p, &mut out, &mut seen);
                     }
                 }
             }
             Err(e) => tracing::warn!("packs_dir {} unreadable, running default pack only: {e}", dir.display()),
         }
     }
-    packs
+    out
 }
 
 pub fn allow_entries(cfg: &Config, packs: &[Pack]) -> Vec<String> {
@@ -242,5 +264,56 @@ settings:
         assert!(p.entities[0].labels.is_empty());
         assert!(p.entities[0].checksum.is_none());
         assert!(p.entities[0].patterns.is_empty());
+    }
+
+    #[test]
+    fn loads_gdpr_builtin_with_mod97_and_ner_entities() {
+        let p = Pack::builtin_pack("gdpr").expect("gdpr.yaml must parse");
+        assert_eq!(p.name, "gdpr");
+        assert!(!p.settings.fail_closed);
+        let iban = p.entities.iter().find(|e| e.id == "iban").expect("iban entity");
+        assert_eq!(iban.checksum.as_deref(), Some("mod97"));
+        let person = p.entities.iter().find(|e| e.id == "person").expect("person entity");
+        assert_eq!(person.detector, "ner");
+        assert!(p.entities.iter().any(|e| e.detector == "ner" && e.alert), "Art 9 categories must alert");
+        let re = p.regex_entities();
+        assert!(re.iter().any(|e| e.id == "iban" && matches!(e.checksum, Some(crate::detect::regex::Checksum::Mod97))));
+    }
+
+    #[test]
+    fn loads_cdr_au_builtin_with_ato_tfn() {
+        let p = Pack::builtin_pack("cdr-au").expect("cdr-au.yaml must parse");
+        assert_eq!(p.name, "cdr-au");
+        let tfn = p.entities.iter().find(|e| e.id == "tfn").expect("tfn entity");
+        assert_eq!(tfn.checksum.as_deref(), Some("ato_tfn"));
+        assert!(tfn.alert);
+        let re = p.regex_entities();
+        assert!(re.iter().any(|e| e.id == "tfn" && matches!(e.checksum, Some(crate::detect::regex::Checksum::AtoTfn))));
+        assert!(p.entities.iter().any(|e| e.id == "medicare_number"));
+        assert!(p.entities.iter().any(|e| e.id == "bsb_account"));
+        assert!(p.entities.iter().any(|e| e.id == "passport_au"));
+    }
+
+    #[test]
+    fn unknown_builtin_returns_none() {
+        assert!(Pack::builtin_pack("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn load_active_dedups_and_includes_named_builtins() {
+        let mut cfg = crate::config::Config::default();
+        cfg.active_packs = vec!["gdpr".into(), "gdpr".into()];
+        let packs = crate::packs::load_active(&cfg);
+        let names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
+        assert!(names.contains(&"default".to_string()));
+        assert_eq!(names.iter().filter(|n| *n == "gdpr").count(), 1, "no dup: {names:?}");
+    }
+
+    #[test]
+    fn load_active_empty_active_packs_returns_default_only() {
+        let cfg = crate::config::Config::default();
+        let packs = crate::packs::load_active(&cfg);
+        assert_eq!(packs.len(), 1);
+        assert_eq!(packs[0].name, "default");
     }
 }
