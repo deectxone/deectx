@@ -1,5 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Action { Mask, Redact }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Action { #[default] Mask, Redact }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Span {

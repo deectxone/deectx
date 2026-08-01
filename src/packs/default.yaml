@@ -1,0 +1,23 @@
+name: default
+version: 0.1.0
+entities:
+  - id: email
+    detector: regex
+    pattern: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
+    action: mask
+  - id: credit_card
+    detector: regex
+    pattern: '\b(?:\d[ -]?){13,19}\b'
+    checksum: luhn
+    action: mask
+  - id: api_key
+    detector: secrets
+    patterns:
+      - 'AKIA[0-9A-Z]{16}'
+      - 'ghp_[A-Za-z0-9]{36}'
+      - '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+    entropy_min: 4.5
+    action: redact
+settings:
+  failClosed: false
+  allow: []
