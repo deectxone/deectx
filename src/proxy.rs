@@ -1,7 +1,8 @@
 use crate::config::Config;
-use crate::detect::{regex::RegexDetector, secrets::SecretsDetector, DetectorChain};
+use crate::detect::DetectorChain;
 use crate::ledger::{sha256_hex, Ledger, LedgerEntry, LedgerEvent};
 use crate::masker::Masker;
+use crate::packs;
 use crate::span::Action;
 use anyhow::Result;
 use axum::{body::Bytes, extract::State, http::HeaderMap, response::Response, routing::post, Router};
@@ -15,6 +16,7 @@ struct AppState {
     masker: Masker,
     ledger: Ledger,
     http: reqwest::Client,
+    packs: Vec<String>,
 }
 
 pub async fn run_proxy(cfg: Config) -> Result<()> {
@@ -24,12 +26,15 @@ pub async fn run_proxy(cfg: Config) -> Result<()> {
 }
 
 pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<()> {
+    let packs = packs::load_active(&cfg);
+    let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
     let state = Arc::new(AppState {
         upstream: cfg.upstream.trim_end_matches('/').to_string(),
-        chain: DetectorChain::new(vec![Box::new(RegexDetector::new()), Box::new(SecretsDetector::new())]),
+        chain: packs::build_chain(&packs),
         masker: Masker::new(),
         ledger: Ledger::new(cfg.ledger_path)?,
         http: reqwest::Client::new(),
+        packs: pack_names,
     });
     let app = Router::new().route("/v1/chat/completions", post(handle_chat)).with_state(state);
     axum::serve(listener, app).await?;
@@ -100,6 +105,7 @@ async fn handle_chat(State(st): State<Arc<AppState>>, headers: HeaderMap, body: 
         session: session.clone(),
         events,
         latency_ms: start.elapsed().as_millis(),
+        packs: st.packs.clone(),
     };
     if let Err(e) = st.ledger.append(&entry) {
         tracing::warn!("ledger append failed: {e}");

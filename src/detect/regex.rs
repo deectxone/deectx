@@ -17,14 +17,6 @@ impl RegexDetector {
     pub fn from_entities(entities: Vec<RegexEntity>) -> Self {
         Self { entities }
     }
-
-    /// Shim matching M1's hardcoded email+card behavior; replaced by pack wiring in Task 4.
-    pub fn new() -> Self {
-        Self::from_entities(vec![
-            RegexEntity { id: "email".into(), pattern: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap(), action: Action::Mask, luhn: false },
-            RegexEntity { id: "credit_card".into(), pattern: Regex::new(r"\b(?:\d[ -]?){13,19}\b").unwrap(), action: Action::Mask, luhn: true },
-        ])
-    }
 }
 
 pub(crate) fn luhn_valid(digits: &str) -> bool {

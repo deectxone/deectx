@@ -33,20 +33,6 @@ impl SecretsDetector {
         }
         out
     }
-
-    /// Shim matching M1's hardcoded behavior; replaced by pack wiring in Task 4.
-    pub fn new() -> Self {
-        Self::from_entities(vec![SecretsEntity {
-            id: "api_key".into(),
-            patterns: vec![
-                Regex::new(r"AKIA[0-9A-Z]{16}").unwrap(),
-                Regex::new(r"ghp_[A-Za-z0-9]{36}").unwrap(),
-                Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").unwrap(),
-            ],
-            entropy_min: Some(4.5),
-            action: Action::Redact,
-        }])
-    }
 }
 
 pub(crate) fn shannon_entropy(s: &str) -> f64 {
