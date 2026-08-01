@@ -1,0 +1,4 @@
+name: ghp_token
+text: "token ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+expected:
+  - { entity: api_key, text: "ghp_abcdefghijklmnopqrstuvwxyz0123456789" }
