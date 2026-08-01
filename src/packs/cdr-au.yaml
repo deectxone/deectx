@@ -1,0 +1,36 @@
+name: cdr-au
+version: 0.1.0
+entities:
+  - id: tfn
+    detector: regex
+    pattern: '\b\d{8,9}\b'
+    checksum: ato_tfn
+    action: mask
+    alert: true
+  - id: medicare_number
+    detector: regex
+    pattern: '\b\d{10,11}\b'
+    action: mask
+    alert: true
+  - id: bsb_account
+    detector: regex
+    pattern: '\b\d{3}-\d{3}-\d{6,9}\b'
+    action: mask
+    alert: true
+  - id: driver_licence_au
+    detector: regex
+    pattern: '\b\d{8,9}\b'
+    action: mask
+  - id: passport_au
+    detector: regex
+    pattern: '\b[A-Z]\d{7}\b'
+    action: mask
+    alert: true
+  - id: centrelink_crn
+    detector: regex
+    pattern: '\b\d{10}[A-Za-z]\b'
+    action: mask
+    alert: true
+settings:
+  failClosed: false
+  allow: []
