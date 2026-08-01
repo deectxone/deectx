@@ -135,6 +135,14 @@ pub fn load_active(cfg: &Config) -> Vec<Pack> {
     packs
 }
 
+pub fn allow_entries(cfg: &Config, packs: &[Pack]) -> Vec<String> {
+    let mut out = cfg.allowlist.clone();
+    for p in packs {
+        out.extend(p.settings.allow.iter().cloned());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
