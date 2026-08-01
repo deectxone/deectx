@@ -17,6 +17,7 @@ struct AppState {
     ledger: Ledger,
     http: reqwest::Client,
     packs: Vec<String>,
+    allowlist: crate::allowlist::Allowlist,
 }
 
 pub async fn run_proxy(cfg: Config) -> Result<()> {
@@ -28,6 +29,7 @@ pub async fn run_proxy(cfg: Config) -> Result<()> {
 pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<()> {
     let packs = packs::load_active(&cfg);
     let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
+    let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(&cfg, &packs));
     let state = Arc::new(AppState {
         upstream: cfg.upstream.trim_end_matches('/').to_string(),
         chain: packs::build_chain(&packs),
@@ -35,6 +37,7 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
         ledger: Ledger::new(cfg.ledger_path)?,
         http: reqwest::Client::new(),
         packs: pack_names,
+        allowlist,
     });
     let app = Router::new().route("/v1/chat/completions", post(handle_chat)).with_state(state);
     axum::serve(listener, app).await?;
@@ -61,7 +64,7 @@ async fn handle_chat(State(st): State<Arc<AppState>>, headers: HeaderMap, body: 
     let mut events = Vec::new();
 
     let mask_content = |content: &str, session: &str, st: &AppState, events: &mut Vec<LedgerEvent>| -> Option<String> {
-        let spans = st.chain.detect(content);
+        let spans = st.allowlist.filter(st.chain.detect(content));
         if spans.is_empty() {
             return None;
         }
