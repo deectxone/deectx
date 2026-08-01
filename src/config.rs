@@ -14,6 +14,8 @@ pub struct Config {
     #[serde(default)]
     pub packs_dir: Option<PathBuf>,
     #[serde(default)]
+    pub model_dir: Option<PathBuf>,
+    #[serde(default)]
     pub allowlist: Vec<String>,
     #[serde(default)]
     pub ner: bool,
@@ -25,7 +27,7 @@ fn default_ledger() -> PathBuf { PathBuf::from("./ledger.jsonl") }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { listen: default_listen(), upstream: default_upstream(), ledger_path: default_ledger(), active_packs: Vec::new(), packs_dir: None, allowlist: Vec::new(), ner: false }
+        Self { listen: default_listen(), upstream: default_upstream(), ledger_path: default_ledger(), active_packs: Vec::new(), packs_dir: None, model_dir: None, allowlist: Vec::new(), ner: false }
     }
 }
 

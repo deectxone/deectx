@@ -3,9 +3,7 @@ use crate::detect::{regex::{RegexDetector, RegexEntity}, secrets::{SecretsDetect
 use crate::span::Action;
 use anyhow::Result;
 use regex::Regex;
-use std::path::Path;
-#[cfg(feature = "ner")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct Pack {
@@ -19,11 +17,12 @@ pub struct Pack {
 }
 
 fn default_version() -> String { "0.1.0".into() }
+fn default_detector() -> String { "regex".into() }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PackEntity {
     pub id: String,
-    #[serde(default)]
+    #[serde(default = "default_detector")]
     pub detector: String, // "regex" | "secrets" | "ner"
     #[serde(default)]
     pub labels: Vec<String>,
@@ -81,13 +80,18 @@ impl Pack {
         self.entities.iter()
             .filter(|e| e.detector == "regex")
             .filter_map(|e| {
-                let pattern = Regex::new(e.pattern.as_deref()?).ok()?;
-                Some(RegexEntity {
-                    id: e.id.clone(),
-                    pattern,
-                    action: e.action,
-                    luhn: e.checksum.as_deref() == Some("luhn"),
-                })
+                match Regex::new(e.pattern.as_deref().unwrap_or("")) {
+                    Ok(pattern) => Some(RegexEntity {
+                        id: e.id.clone(),
+                        pattern,
+                        action: e.action,
+                        luhn: e.checksum.as_deref() == Some("luhn"),
+                    }),
+                    Err(err) => {
+                        tracing::warn!("pack entity {} has invalid regex: {err}", e.id);
+                        None
+                    }
+                }
             })
             .collect()
     }
@@ -98,10 +102,16 @@ impl Pack {
             .filter_map(|e| {
                 let mut patterns = Vec::new();
                 if let Some(p) = &e.pattern {
-                    if let Ok(r) = Regex::new(p) { patterns.push(r); }
+                    match Regex::new(p) {
+                        Ok(r) => patterns.push(r),
+                        Err(err) => tracing::warn!("pack entity {} has invalid regex: {err}", e.id),
+                    }
                 }
                 for p in &e.patterns {
-                    if let Ok(r) = Regex::new(p) { patterns.push(r); }
+                    match Regex::new(p) {
+                        Ok(r) => patterns.push(r),
+                        Err(err) => tracing::warn!("pack entity {} has invalid regex: {err}", e.id),
+                    }
                 }
                 Some(SecretsEntity {
                     id: e.id.clone(),
@@ -114,21 +124,30 @@ impl Pack {
     }
 }
 
-pub fn build_chain(packs: &[Pack], ner_enabled: bool) -> DetectorChain {
-    #[cfg(not(feature = "ner"))]
-    let _ = ner_enabled; // feature-off: NER never wired, silence unused param
+pub fn build_chain(packs: &[Pack], ner_enabled: bool, model_dir: PathBuf) -> DetectorChain {
     let regex: Vec<RegexEntity> = packs.iter().flat_map(|p| p.regex_entities()).collect();
     let secrets: Vec<SecretsEntity> = packs.iter().flat_map(|p| p.secrets_entities()).collect();
-    let mut detectors: Vec<Box<dyn Detector>> = vec![
+    let detectors: Vec<Box<dyn Detector>> = vec![
         Box::new(RegexDetector::from_entities(regex)),
         Box::new(SecretsDetector::from_entities(secrets)),
     ];
     #[cfg(feature = "ner")]
-    if ner_enabled {
-        detectors.push(Box::new(crate::detect::ner::NerDetector::new(
-            PathBuf::from("./models"),
+    let detectors = if ner_enabled {
+        let mut d = detectors;
+        d.push(Box::new(crate::detect::ner::NerDetector::new(
+            model_dir,
             packs.iter().flat_map(ner_labels).collect(),
         )));
+        d
+    } else {
+        detectors
+    };
+    #[cfg(not(feature = "ner"))]
+    {
+        let _ = model_dir;
+        if ner_enabled {
+            tracing::warn!("NER requested but the 'ner' feature is not compiled in; running regex+secrets only");
+        }
     }
     DetectorChain::new(detectors)
 }
@@ -144,12 +163,15 @@ fn ner_labels(pack: &Pack) -> Vec<(String, Action)> {
 pub fn load_active(cfg: &Config) -> Vec<Pack> {
     let mut packs = vec![Pack::builtin_default()];
     if let Some(dir) = &cfg.packs_dir {
-        if let Ok(loaded) = Pack::load_dir(dir) {
-            for p in loaded {
-                if cfg.active_packs.is_empty() || cfg.active_packs.contains(&p.name) {
-                    packs.push(p);
+        match Pack::load_dir(dir) {
+            Ok(loaded) => {
+                for p in loaded {
+                    if cfg.active_packs.is_empty() || cfg.active_packs.contains(&p.name) {
+                        packs.push(p);
+                    }
                 }
             }
+            Err(e) => tracing::warn!("packs_dir {} unreadable, running default pack only: {e}", dir.display()),
         }
     }
     packs
