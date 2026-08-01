@@ -52,6 +52,33 @@ impl Masker {
         }
         out
     }
+
+    /// Resolve the placeholder previously assigned to `original` text in this
+    /// session, if any. Returns None for redacted secrets (never stored).
+    pub fn placeholder_for(&self, session: &str, original: &str) -> Option<String> {
+        let sessions = self.sessions.lock().unwrap();
+        sessions.get(session).and_then(|m| m.by_original.get(original)).cloned()
+    }
+
+    /// Convert placeholders back to original values in `text` for this session.
+    /// Replaces by placeholder length descending so `[EMAIL_10]` is restored
+    /// before `[EMAIL_1]` (no substring corruption). Redacted secrets have no
+    /// mapping and stay as `[REDACTED_SECRET]`.
+    pub fn rehydrate(&self, session: &str, text: &str) -> String {
+        let sessions = self.sessions.lock().unwrap();
+        let mut pairs: Vec<(&String, &String)> = Vec::new();
+        if let Some(map) = sessions.get(session) {
+            pairs.extend(map.by_original.iter().map(|(o, p)| (p, o)));
+        }
+        pairs.sort_by_key(|(ph, _)| std::cmp::Reverse(ph.len()));
+        let mut out = text.to_string();
+        for (ph, original) in pairs {
+            if out.contains(ph.as_str()) {
+                out = out.replace(ph.as_str(), original.as_str());
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]
@@ -92,5 +119,34 @@ mod tests {
         let spans = vec![Span::new(0, 7, "email", Action::Mask, "a@x.com")];
         m.mask_text("s_1", t, &spans);
         assert_eq!(m.mask_text("s_2", t, &spans), "[EMAIL_1]");
+    }
+
+    #[test]
+    fn rehydrate_restores_placeholders_and_leaves_redacted() {
+        let m = Masker::new();
+        let spans = vec![
+            Span::new(0, 7, "email", Action::Mask, "a@x.com"),
+            Span::new(12, 19, "email", Action::Mask, "b@x.com"),
+        ];
+        let masked = m.mask_text("s_1", "a@x.com and b@x.com", &spans);
+        assert_eq!(masked, "[EMAIL_1] and [EMAIL_2]");
+        assert_eq!(m.placeholder_for("s_1", "a@x.com"), Some("[EMAIL_1]".to_string()));
+        assert_eq!(m.rehydrate("s_1", "sent to [EMAIL_1] and [EMAIL_2]"),
+                   "sent to a@x.com and b@x.com");
+    }
+
+    #[test]
+    fn rehydrate_handles_double_digit_counters() {
+        // [EMAIL_10] must not be partially clobbered by [EMAIL_1]
+        let m = Masker::new();
+        let spans: Vec<Span> = (1..=10).map(|i| {
+            let start = (i - 1) * 9;
+            Span::new(start, start + 8, "email", Action::Mask, &format!("u{}@x.com", i))
+        }).collect();
+        let masked = m.mask_text("s_1", &spans.iter().map(|s| s.text.clone()).collect::<Vec<_>>().join(" "), &spans);
+        assert!(masked.contains("[EMAIL_10]"));
+        let out = m.rehydrate("s_1", &masked);
+        assert!(out.contains("u10@x.com"));
+        assert!(!out.contains("[EMAIL_10]"));
     }
 }
