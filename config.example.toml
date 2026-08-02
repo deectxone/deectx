@@ -1,0 +1,19 @@
+# deeCtx example configuration. Copy to config.toml and adjust.
+
+listen = "127.0.0.1:8787"
+upstream = "https://api.openai.com"
+upstream_anthropic = "https://api.anthropic.com"
+
+# Hash-only audit ledger (append-only; daily rotation with retention).
+ledger_path = "ledger.jsonl"
+ledger_retention_days = 90
+
+# Built-in packs: default, gdpr, cdr-au. Add packs/*.yaml and reference names here.
+active_packs = ["gdpr"]
+
+# Optional: NER via a local GLiNER ONNX model in model_dir (model.onnx + tokenizer.json).
+# ner = true
+# model_dir = "models"
+
+# Allow-listed values are never masked (case-insensitive).
+# allowlist = ["jane.doe@example.com"]
