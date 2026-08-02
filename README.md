@@ -170,6 +170,45 @@ scripts/release.ps1  (Windows) / scripts/release.sh  → builds zip + computes S
 
 ---
 
+## Troubleshooting
+
+### `cargo install deectx` fails on Windows with a `dlltool` error
+
+If your default Rust toolchain is `x86_64-pc-windows-gnu`, building from source
+can fail with:
+
+```text
+error: error calling dlltool 'dlltool.exe': program not found
+error: dlltool could not create import library ... CreateProcess
+```
+
+**Cause.** rustup's bundled MinGW is incomplete — it ships `dlltool` but not the
+`as`/`ar` binaries it spawns. The `windows-sys`/`windows-link` crates (transitive
+dependencies via `parking_lot`, `reqwest`, …) generate Windows import libraries
+at link time, and that generation fails on this toolchain. This is an
+environment issue, not a deeCtx bug.
+
+**Fix (pick one):**
+
+1. **Install a full MinGW-w64 (recommended)** — e.g. MSYS2:
+   ```powershell
+   winget install MSYS2.MSYS2
+   ```
+   then add `C:\msys64\mingw64\bin` to your `PATH` (System Settings → Environment
+   Variables, then open a new terminal) and retry:
+   ```powershell
+   cargo install deectx
+   ```
+2. **Switch to the MSVC toolchain** — install Visual Studio Build Tools, then:
+   ```powershell
+   rustup default stable-x86_64-pc-windows-msvc
+   cargo install deectx
+   ```
+3. **Skip the build entirely** — use a prebuilt release binary or
+   `scoop install deectx` (see [Install](#install)).
+
+---
+
 ## More
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the full engineering deep-dive.
