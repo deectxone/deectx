@@ -149,14 +149,22 @@ fn mask_walk(
             // Tool arguments are JSON-encoded strings (OpenAI function.arguments);
             // recurse into the decoded value so nested PII is caught too.
             if let Ok(mut inner) = serde_json::from_str::<serde_json::Value>(s) {
-                if mask_walk(st, session, events, &mut inner) {
+                // Only rebuild via a whole-Value round-trip when that is
+                // byte-preserving for unmasked siblings (e.g. no float `1.50` ->
+                // `1.5` drift, no whitespace collapsing). Otherwise fall back to
+                // masking the raw string bytes so every unaffected node keeps its
+                // exact original text and a masked sibling can't corrupt numbers.
+                let byte_preserving = inner.to_string() == *s;
+                if byte_preserving && mask_walk(st, session, events, &mut inner) {
                     *s = inner.to_string();
                     changed = true;
                 }
             }
-            if let Some(masked) = mask_content(st, session, s, events) {
-                *s = masked;
-                changed = true;
+            if !changed {
+                if let Some(masked) = mask_content(st, session, s, events) {
+                    *s = masked;
+                    changed = true;
+                }
             }
             changed
         }

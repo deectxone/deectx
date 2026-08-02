@@ -124,7 +124,7 @@ impl Ledger {
                 }
                 match serde_json::from_str::<LedgerEntry>(line) {
                     Ok(e) => out.push(e),
-                    Err(e) => tracing::warn!("ledger {} line {} unparseable: {e}", f.display(), i + 1),
+                    Err(_) => tracing::warn!("ledger {} line {} unparseable", f.display(), i + 1),
                 }
             }
         }
