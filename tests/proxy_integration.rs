@@ -169,6 +169,54 @@ async fn masks_tool_arguments_on_request() {
 }
 
 #[tokio::test]
+async fn masking_a_tool_arg_preserves_sibling_numeric_fields() {
+    let (upstream, received) = mock_upstream();
+    let ledger_path = std::env::temp_dir().join(format!("deectx_fc_sib_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream: upstream.clone(),
+        ledger_path,
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    let client = reqwest::Client::new();
+    let body = json!({
+        "model": "gpt-4",
+        "messages": [
+            {"role": "user", "content": "bill the user"},
+            {"role": "assistant", "content": null, "tool_calls": [{"id":"c1","type":"function","function":{"name":"charges",
+                "arguments": "{\"email\":\"jane.doe@example.com\",\"amount\":1.50,\"big\":9007199254740993}"}}]}
+        ]
+    });
+    let resp = client
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", port))
+        .json(&body).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let upstream = received.lock().unwrap().clone();
+    assert!(upstream.contains("[EMAIL_1]"), "email must be masked upstream: {upstream}");
+    assert!(!upstream.contains("jane.doe@example.com"), "raw email leaked upstream: {upstream}");
+    // Parse the forwarded body down to the tool-call arguments (the arguments
+    // arrive as an escaped JSON string) and verify masking the email did not
+    // re-encode the unmasked sibling numbers.
+    let body: serde_json::Value = serde_json::from_str(&upstream).unwrap();
+    let args_raw = body["messages"][1]["tool_calls"][0]["function"]["arguments"].as_str().unwrap();
+    assert!(args_raw.contains("\"amount\":1.50"),
+        "float trailing zero dropped despite sibling masked: {args_raw}");
+    assert!(args_raw.contains("9007199254740993"),
+        "large integer precision lost despite sibling masked: {args_raw}");
+    let args: serde_json::Value = serde_json::from_str(args_raw).unwrap();
+    assert_eq!(args["email"], "[EMAIL_1]", "email must resolve to placeholder");
+    assert_eq!(args["big"], 9007199254740993i64, "big int must round-trip exactly");
+}
+
+#[tokio::test]
 async fn masks_anthropic_tool_use_input() {
     let (up_addr, seen) = mock_upstream_anthropic().await;
     let ledger_path = std::env::temp_dir().join(format!("deectx_tools_an_{}.jsonl", std::process::id()));

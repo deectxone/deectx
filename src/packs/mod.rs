@@ -160,13 +160,40 @@ pub fn build_chain(packs: &[Pack], ner_enabled: bool, model_dir: PathBuf) -> Det
         detectors
     };
     #[cfg(not(feature = "ner"))]
-    {
+    let detectors = if ner_enabled {
         let _ = model_dir;
-        if ner_enabled {
-            tracing::warn!("NER requested but the 'ner' feature is not compiled in; running regex+secrets only");
-        }
-    }
+        tracing::warn!("NER requested but the 'ner' feature is not compiled in; failClosed gate will refuse NER requests");
+        // Sentinel that never becomes ready: with `ner:true` requested but the
+        // feature absent no NerDetector exists, so without this marker the
+        // failClosed gate would silently open and NER entities flow unmasked.
+        // Pushing a not-ready detector makes chain.ready() false so the gate
+        // fires (503) instead of failing open.
+        let mut d = detectors;
+        d.push(Box::new(NotReadyDetector));
+        d
+    } else {
+        let _ = model_dir;
+        detectors
+    };
     DetectorChain::new(detectors)
+}
+
+#[cfg(not(feature = "ner"))]
+struct NotReadyDetector;
+
+#[cfg(not(feature = "ner"))]
+impl Detector for NotReadyDetector {
+    fn detect(&self, _text: &str) -> Vec<crate::span::Span> { Vec::new() }
+    fn ready(&self) -> bool { false }
+}
+
+#[cfg(all(test, not(feature = "ner")))]
+#[test]
+fn ner_requested_without_feature_is_not_ready_for_fail_closed_gate() {
+    let chain = build_chain(&[Pack::builtin_default()], true, PathBuf::new());
+    assert!(!chain.ready(), "ner:true without the ner feature must not report ready");
+    let ok = build_chain(&[Pack::builtin_default()], false, PathBuf::new());
+    assert!(ok.ready(), "ner disabled keeps chain ready");
 }
 
 #[cfg(feature = "ner")]

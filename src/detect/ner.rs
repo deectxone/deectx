@@ -86,7 +86,11 @@ impl Detector for NerDetector {
     }
 
     fn ready(&self) -> bool {
-        self.session.is_some() && self.tokenizer.is_some()
+        match &self.session {
+            Some(m) if m.is_poisoned() => false,
+            Some(_) => self.tokenizer.is_some(),
+            None => false,
+        }
     }
 }
 
