@@ -3,7 +3,9 @@
 # the hook denies the action. Cursor treats a non-zero exit or invalid JSON as
 # a block when failClosed:true, so any unexpected error also denies.
 set -euo pipefail
-url="${DEECTX_URL:-http://127.0.0.1:8787/healthz}"
+url="${DEECTX_URL:-http://127.0.0.1:8787/}"
+# Guard against a trailing slash in DEECTX_URL -> double slash before /healthz.
+url="${url%/}/healthz"
 if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
   echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permission":{"type":"allow"}}}'
 else
