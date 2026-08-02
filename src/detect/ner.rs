@@ -174,7 +174,7 @@ fn build_prompt(
     for label in labels {
         push_word(&[ENT_TOKEN_ID], &mut ids, &mut word_starts);
         prompt_words += 1;
-        let enc = tokenizer.encode(*label, false).map_err(|e| anyhow::anyhow!("encode {label}: {e}"))?;
+        let enc = tokenizer.encode(*label, false).map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))?;
         let toks: Vec<i64> = enc.get_ids().iter().map(|&i| i as i64).collect();
         push_word(&toks, &mut ids, &mut word_starts);
         prompt_words += 1;
@@ -183,7 +183,7 @@ fn build_prompt(
     prompt_words += 1;
 
     for word in text_words {
-        let enc = tokenizer.encode(*word, false).map_err(|e| anyhow::anyhow!("encode {word}: {e}"))?;
+        let enc = tokenizer.encode(*word, false).map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))?;
         let toks: Vec<i64> = enc.get_ids().iter().map(|&i| i as i64).collect();
         push_word(&toks, &mut ids, &mut word_starts);
     }
