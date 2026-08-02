@@ -34,7 +34,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Serve { config } => {
-            let cfg = Config::load(&config).unwrap_or_default();
+            let cfg = if config.exists() {
+                Config::load(&config)?
+            } else {
+                Config::default()
+            };
             deectx::proxy::run_proxy(cfg).await?;
         }
         Cmd::Audit { config, today, export } => {
