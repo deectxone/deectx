@@ -26,3 +26,20 @@ See `shims/` for Cursor and opencode integration.
 ```bash
 deectx audit --config config.toml --today --export report.json
 ```
+
+## Latency budget
+
+deeCtx sits on the hot path between your coding tool and the model API, so latency
+is budgeted per-phase. Measured on a local machine; absolute numbers vary with CPU
+and traffic, but the split and ceilings hold:
+
+| Phase | Budget | Notes |
+|-------|--------|-------|
+| Rule/detection pass (regex + secrets) | ms-scale | In-process, no I/O |
+| NER inference (when enabled) | per-chunk, fail-open | OnnxRuntime; disabled if model/proxy can't load |
+| Masking + ledger write | async | Never blocks the response path |
+| Response rehydration | in-memory | No network round-trip |
+
+If the proxy starts to exceed its budget — especially in the detection phase with
+NER enabled — it fails open rather than stalling requests, trading a missed mask
+for not blocking your workflow. See the `tracing` output for per-phase timings.
