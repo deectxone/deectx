@@ -3,6 +3,7 @@ name = "deectx"
 version = "0.1.0"
 description = "Local-first PII-masking reverse proxy for AI coding tools"
 license = "Apache-2.0"
+repository = "https://github.com/deectxone/deectx"
 edition = "2021"
 
 [features]
