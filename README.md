@@ -57,7 +57,7 @@ Builds are available for **Windows (x86_64)**, **macOS (Intel + Apple Silicon)**
 and **Linux (x86_64)**. Choose whichever is easiest:
 
 - **Cargo (recommended, all platforms)**: `cargo install deectx`
-- **Homebrew (macOS/Linux)**: `brew install deectx`
+- **Homebrew (macOS/Linux)**: `brew tap deectxone/deectx && brew install deectx`
 - **Scoop (Windows)**: `scoop install deectx`
 - **Binary zip/tarball**: download from
   [GitHub Releases](https://github.com/deectxone/deectx/releases) — each release
