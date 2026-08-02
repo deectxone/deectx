@@ -1,5 +1,5 @@
-use crate::span::{Action, Span};
 use crate::detect::Detector;
+use crate::span::{Action, Span};
 use regex::Regex;
 use std::collections::HashMap;
 
@@ -18,19 +18,18 @@ pub struct SecretsDetector {
 
 impl SecretsDetector {
     pub fn from_entities(entities: Vec<SecretsEntity>) -> Self {
-        let mut out = Self { entities: Vec::new(), entropy: None };
+        let mut out = Self {
+            entities: Vec::new(),
+            entropy: None,
+        };
+        let entropy_re = Regex::new(r"\b[A-Za-z0-9/+_=.-]{21,}\b").unwrap();
         for e in entities {
             if !e.patterns.is_empty() {
-                out.entities.push((e.id.clone(), e.patterns, e.action, e.alert));
+                out.entities
+                    .push((e.id.clone(), e.patterns, e.action, e.alert));
             }
-            if e.entropy_min.is_some() && out.entropy.is_none() {
-                out.entropy = Some((
-                    e.id.clone(),
-                    Regex::new(r"\b[A-Za-z0-9/+_=.-]{21,}\b").unwrap(),
-                    e.entropy_min.unwrap(),
-                    e.action,
-                    e.alert,
-                ));
+            if let Some(min) = e.entropy_min {
+                out.entropy = Some((e.id.clone(), entropy_re.clone(), min, e.action, e.alert));
             }
         }
         out
@@ -39,12 +38,16 @@ impl SecretsDetector {
 
 pub(crate) fn shannon_entropy(s: &str) -> f64 {
     let mut freq: HashMap<char, usize> = HashMap::new();
-    for c in s.chars() { *freq.entry(c).or_insert(0) += 1; }
+    for c in s.chars() {
+        *freq.entry(c).or_insert(0) += 1;
+    }
     let len = s.len() as f64;
-    freq.values().map(|&n| {
-        let p = n as f64 / len;
-        -p * p.log2()
-    }).sum()
+    freq.values()
+        .map(|&n| {
+            let p = n as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
 }
 
 impl Detector for SecretsDetector {
@@ -53,14 +56,20 @@ impl Detector for SecretsDetector {
         for (id, patterns, action, alert) in &self.entities {
             for pat in patterns {
                 for m in pat.find_iter(text) {
-                    out.push(Span { alert: *alert, ..Span::new(m.start(), m.end(), id, *action, m.as_str()) });
+                    out.push(Span {
+                        alert: *alert,
+                        ..Span::new(m.start(), m.end(), id, *action, m.as_str())
+                    });
                 }
             }
         }
         if let Some((id, re, min, action, alert)) = &self.entropy {
             for m in re.find_iter(text) {
                 if shannon_entropy(m.as_str()) > *min {
-                    out.push(Span { alert: *alert, ..Span::new(m.start(), m.end(), id, *action, m.as_str()) });
+                    out.push(Span {
+                        alert: *alert,
+                        ..Span::new(m.start(), m.end(), id, *action, m.as_str())
+                    });
                 }
             }
         }
@@ -102,7 +111,9 @@ mod tests {
 
     #[test]
     fn ignores_low_entropy_long_words() {
-        assert!(test_detector().detect("say AAAAAAAAAAAAAAAAAAAAAAAA aloud").is_empty());
+        assert!(test_detector()
+            .detect("say AAAAAAAAAAAAAAAAAAAAAAAA aloud")
+            .is_empty());
     }
 
     #[test]
@@ -117,6 +128,9 @@ mod tests {
         // 21+ char bare token with high entropy is NOT flagged without entropy_min
         assert!(d.detect("token x9Kf2mQ8vLp3nR7sW1yZ4bN6cD").is_empty());
         // explicit pattern still fires
-        assert_eq!(d.detect("ghp_abcdefghijklmnopqrstuvwxyz0123456789").len(), 1);
+        assert_eq!(
+            d.detect("ghp_abcdefghijklmnopqrstuvwxyz0123456789").len(),
+            1
+        );
     }
 }

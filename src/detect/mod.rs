@@ -1,13 +1,15 @@
-pub mod regex;
-pub mod secrets;
 #[cfg(feature = "ner")]
 pub mod ner;
+pub mod regex;
+pub mod secrets;
 
 use crate::span::Span;
 
 pub trait Detector: Send + Sync {
     fn detect(&self, text: &str) -> Vec<Span>;
-    fn ready(&self) -> bool { true }
+    fn ready(&self) -> bool {
+        true
+    }
 }
 
 pub struct DetectorChain {
@@ -25,7 +27,7 @@ impl DetectorChain {
         spans.sort_by_key(|s| (s.start, std::cmp::Reverse(s.end - s.start)));
         let mut out: Vec<Span> = Vec::new();
         for s in spans {
-            if out.last().map_or(true, |prev| s.start >= prev.end) {
+            if out.last().is_none_or(|prev| s.start >= prev.end) {
                 out.push(s);
             }
         }
@@ -64,8 +66,12 @@ mod tests {
 
     struct NotReady;
     impl Detector for NotReady {
-        fn detect(&self, _t: &str) -> Vec<Span> { vec![] }
-        fn ready(&self) -> bool { false }
+        fn detect(&self, _t: &str) -> Vec<Span> {
+            vec![]
+        }
+        fn ready(&self) -> bool {
+            false
+        }
     }
 
     #[test]

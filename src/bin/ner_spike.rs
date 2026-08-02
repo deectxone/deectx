@@ -18,12 +18,28 @@ fn main() -> anyhow::Result<()> {
     let mut session = ort::session::Session::builder()?.commit_from_file(model_path)?;
     tracing::info!("session loaded");
     for i in session.inputs() {
-        let shape: Vec<i64> = i.dtype().tensor_shape().map(|s| s.to_vec()).unwrap_or_default();
-        tracing::info!("input {}: type={:?} shape={shape:?}", i.name(), i.dtype().tensor_type());
+        let shape: Vec<i64> = i
+            .dtype()
+            .tensor_shape()
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+        tracing::info!(
+            "input {}: type={:?} shape={shape:?}",
+            i.name(),
+            i.dtype().tensor_type()
+        );
     }
     for o in session.outputs() {
-        let shape: Vec<i64> = o.dtype().tensor_shape().map(|s| s.to_vec()).unwrap_or_default();
-        tracing::info!("output {}: type={:?} shape={shape:?}", o.name(), o.dtype().tensor_type());
+        let shape: Vec<i64> = o
+            .dtype()
+            .tensor_shape()
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+        tracing::info!(
+            "output {}: type={:?} shape={shape:?}",
+            o.name(),
+            o.dtype().tensor_type()
+        );
     }
 
     let tokenizer = tokenizers::Tokenizer::from_file(tok_path)
@@ -48,7 +64,9 @@ fn main() -> anyhow::Result<()> {
         push_word(&[ENT_TOKEN_ID], &mut ids, &mut word_starts);
         seen_words += 1;
         prompt_words += 1;
-        let enc = tokenizer.encode(*label, false).map_err(|e| anyhow::anyhow!("encode {label}: {e}"))?;
+        let enc = tokenizer
+            .encode(*label, false)
+            .map_err(|e| anyhow::anyhow!("encode {label}: {e}"))?;
         let toks: Vec<i64> = enc.get_ids().iter().map(|&i| i as i64).collect();
         push_word(&toks, &mut ids, &mut word_starts);
         seen_words += 1;
@@ -59,7 +77,9 @@ fn main() -> anyhow::Result<()> {
     prompt_words += 1;
 
     for word in text_words.iter() {
-        let enc = tokenizer.encode(*word, false).map_err(|e| anyhow::anyhow!("encode {word}: {e}"))?;
+        let enc = tokenizer
+            .encode(*word, false)
+            .map_err(|e| anyhow::anyhow!("encode {word}: {e}"))?;
         let toks: Vec<i64> = enc.get_ids().iter().map(|&i| i as i64).collect();
         push_word(&toks, &mut ids, &mut word_starts);
         seen_words += 1;
@@ -77,7 +97,10 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    tracing::info!("prompt_words={prompt_words}; text_words={text_len}; seq_len={len}; total word starts={}", word_starts.len());
+    tracing::info!(
+        "prompt_words={prompt_words}; text_words={text_len}; seq_len={len}; total word starts={}",
+        word_starts.len()
+    );
     tracing::info!("input_ids={ids:?}");
     tracing::info!("words_mask={words_mask:?}");
 
@@ -142,24 +165,34 @@ fn main() -> anyhow::Result<()> {
                 scores.push((label_names[c], p));
             }
             scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-            tracing::info!("word {w} ({}) top: {:?}",
+            tracing::info!(
+                "word {w} ({}) top: {:?}",
                 text_words.get(w).copied().unwrap_or("?"),
-                &scores[..n_classes.min(3)]);
+                &scores[..n_classes.min(3)]
+            );
         }
         for c in 0..n_classes {
             let mut best = (0usize, 0usize, f32::MIN);
             for w in 0..n_words {
                 for width in 0..max_width {
-                    if w + width >= n_words { break; }
+                    if w + width >= n_words {
+                        break;
+                    }
                     let logit = data[(w * max_width + width) * n_classes + c];
                     let p = 1.0 / (1.0 + (-logit).exp());
-                    if p > best.2 { best = (w, width, p); }
+                    if p > best.2 {
+                        best = (w, width, p);
+                    }
                 }
             }
             let span = &text_words[best.0..=best.0 + best.1];
-            tracing::info!("best {:>12} span: words {:?} = \"{}\" (p={:.4})",
-                label_names[c], &text_words[best.0..=best.0 + best.1],
-                span.join(" "), best.2);
+            tracing::info!(
+                "best {:>12} span: words {:?} = \"{}\" (p={:.4})",
+                label_names[c],
+                &text_words[best.0..=best.0 + best.1],
+                span.join(" "),
+                best.2
+            );
         }
     }
     Ok(())
