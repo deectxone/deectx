@@ -2,6 +2,12 @@
 
 **Local-first PII-masking proxy for AI coding tools.**
 
+<div>
+<a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
+<a href="https://crates.io/crates/deectx"><img src="https://img.shields.io/crates/v/deectx" alt="crates.io"></a>
+<a href="https://github.com/deectxone/deectx/releases"><img src="https://img.shields.io/github/v/release/deectxone/deectx" alt="GitHub release"></a>
+</div>
+
 deeCtx sits between your AI coding agent and the model API. It scans every prompt
 you send, masks personally-identifiable information (PII) and secrets with
 reversible, session-scoped placeholders *before* anything reaches the model
@@ -47,10 +53,19 @@ text → DetectorChain ─┬─ Regex (email, IBAN, cards, … + Luhn/Mod97/Ato
 
 ## Install
 
-- **Cargo**: `cargo install deectx`
-- **Homebrew**: `brew install deectx`
-- **Scoop (Windows)**: `scoop install deectx` (manifest in `install/scoop/`)
-- **Binary release**: grab a zip from GitHub Releases (built by `scripts/release.ps1` / `scripts/release.sh`)
+Builds are available for **Windows (x86_64)**, **macOS (Intel + Apple Silicon)**,
+and **Linux (x86_64)**. Choose whichever is easiest:
+
+- **Cargo (recommended, all platforms)**: `cargo install deectx`
+- **Homebrew (macOS/Linux)**: `brew install deectx`
+- **Scoop (Windows)**: `scoop install deectx`
+- **Binary zip/tarball**: download from
+  [GitHub Releases](https://github.com/deectxone/deectx/releases) — each release
+  is built for all four targets by CI.
+
+All three package paths ship and are refreshed automatically on release.
+> Prefer building from source? `cargo install --path .` or `cargo build --release`
+> (see [Development](#development)).
 
 ## Quick start (2 minutes)
 
