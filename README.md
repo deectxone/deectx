@@ -1,45 +1,162 @@
 # deeCtx
 
-Local-first PII-masking proxy for AI coding tools. Sits between your agent and the
-model API: it masks PII and secrets with reversible session-scoped placeholders,
-rehydrates responses, and writes a hash-only audit ledger.
+**Local-first PII-masking proxy for AI coding tools.**
+
+deeCtx sits between your AI coding agent and the model API. It scans every prompt
+you send, masks personally-identifiable information (PII) and secrets with
+reversible, session-scoped placeholders *before* anything reaches the model
+service, forwards the masked request, then rehydrates the response — so you get
+your real data back with full context, and third parties never see it.
+
+```
+tool ──▶ [ deeCtx /v1 ] ──mask──▶ upstream API (OpenAI | Anthropic)
+        [      /\      ]
+        └──────┘ rehydrate
+```
+
+**Why this matters.** AI coding tools (Cursor, opencode, Claude Code, custom
+SDK clients, …) send your code, prompts, and local context to remote model
+APIs. If that context contains emails, phone numbers, IBANs, medical terms,
+Australian CDR fields, or API keys, it leaves your machine. deeCtx minimizes
+what actually leaves — while preserving your workflow.
+
+For a deep dive (data flow, component map, threat model, how to extend), see
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+---
+
+## What it solves
+
+| Problem | deeCtx |
+|---------|--------|
+| Sensitive data uploaded to 3rd-party model APIs | Detects + masks PII/secrets before the request is forwarded |
+| Conversation context loss when you redact yourself | **Reversible** in-session masking (`[EMAIL_1]` ↔ `jane@example.com`) |
+| Ability to prove what data was processed (DPIA/compliance) | **Hash-only** append-only ledger + `audit` reporting — no raw PII stored |
+| Detector misses / false positives | Pluggable **packs** (regex + checksum, entropy heuristics, optional NER) |
+| A required classifier being down | **Fail-closed** gate: request is refused (HTTP 503) rather than leaking |
+
+### Detection pipeline
+
+```
+text → DetectorChain ─┬─ Regex (email, IBAN, cards, … + Luhn/Mod97/Ato-TFN checks)
+                      ├─ Secrets (API keys, … + entropy filter) ──► Allowlist ─► Masker ─► tuned text
+                      └─ NER (optional, GLiNER: names, addresses, Art.9 health…) ─┘      └► ledger
+```
+
+---
 
 ## Install
 
-- Cargo: `cargo install deectx`
-- Homebrew: `brew install deectx`
-- Scoop (Windows): `scoop install deectx` (manifest in `install/scoop/`)
-- Binary releases: GitHub Releases (`scripts/release.ps1` / `scripts/release.sh`)
+- **Cargo**: `cargo install deectx`
+- **Homebrew**: `brew install deectx`
+- **Scoop (Windows)**: `scoop install deectx` (manifest in `install/scoop/`)
+- **Binary release**: grab a zip from GitHub Releases (built by `scripts/release.ps1` / `scripts/release.sh`)
 
-## Run
+## Quick start (2 minutes)
 
 ```bash
-cp config.example.toml config.toml   # or start with defaults
+# 1. Copy the example config and start the proxy
+cp config.example.toml config.toml
 deectx serve --config config.toml
+# listening on http://127.0.0.1:8787
+
+# 2. Point your AI tool at the proxy
+#    OpenAI-compatible base:  http://127.0.0.1:8787/v1
+#    Anthropic-compatible:    http://127.0.0.1:8787/v1/messages
 ```
 
-Point your tool at `http://127.0.0.1:8787/v1` (OpenAI) or `/v1/messages` (Anthropic).
-See `shims/` for Cursor and opencode integration.
+To enable methods, set `active_packs = ["gdpr"]` (or `["cdr-au"]`) in
+`config.toml`. NER (semantic detection of people, addresses, health terms) is
+optional and requires a GLiNER ONNX model — see both files and
+[`ARCHITECTURE.md`](ARCHITECTURE.md) §5–6.
 
-## Audit
+Tool integration is turnkey for **Cursor** and **opencode** via the shipped
+shims — see [`shims/README.md`](shims/README.md). Any tool that lets you override
+its model base URL to the proxy works too (see “AI tool support” below).
+
+## Verify it's working
+
+```bash
+curl -fsS http://127.0.0.1:8787/healthz   # → ok
+```
+
+Send a prompt with a test email; check the audit:
 
 ```bash
 deectx audit --config config.toml --today --export report.json
 ```
 
-## Latency budget
+---
 
-deeCtx sits on the hot path between your coding tool and the model API, so latency
-is budgeted per-phase. Measured on a local machine; absolute numbers vary with CPU
-and traffic, but the split and ceilings hold:
+## Configuration
 
-| Phase | Budget | Notes |
-|-------|--------|-------|
-| Rule/detection pass (regex + secrets) | ms-scale | In-process, no I/O |
-| NER inference (when enabled) | per-chunk, fail-open | OnnxRuntime; disabled if model/proxy can't load |
-| Masking + ledger write | async | Never blocks the response path |
-| Response rehydration | in-memory | No network round-trip |
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) §11 for the full field reference. The
+defaults work out of the box; the notable knobs are:
 
-If the proxy starts to exceed its budget — especially in the detection phase with
-NER enabled — it fails open rather than stalling requests, trading a missed mask
-for not blocking your workflow. See the `tracing` output for per-phase timings.
+| Setting | What it controls |
+|---------|------------------|
+| `upstream` / `upstream_anthropic` | Where masked requests are sent. |
+| `active_packs` | Built-in PII packs to turn on (`default`(always) , `gdpr`, `cdr-au`). |
+| `ner` + `model_dir` | Optional semantic NER via a local GLiNER ONNX model. |
+| `allowlist` | Values never masked (case-insensitive). |
+| `ledger_path` / `ledger_retention_days` | Audit log location and retention. |
+
+---
+
+## AI product support
+
+### What works
+
+Any client that can be pointed at deeCtx's `:8787` base URL and uses one of the
+two supported request schemas:
+
+- **OpenAI-compatible** chat: `/v1/chat/completions` — including **streaming**
+  (SSE) responses rehydrated in real time.
+- **Anthropic-compatible** messages: `/v1/messages`.
+- Concretely supported examples (shims included): **Cursor** and **opencode**,
+  plus any LangChain/OpenAI SDK caller with a configurable `base_url`/`OPENAI_BASE_URL`.
+
+### Not supported (know the limits)
+
+- Model APIs with a **non‑OpenAI/Anthropic wire format** (e.g. Gemini native
+  REST, Bedrock-native) **as-is** — they'd need a new request/response adapter.
+- **Non‑text / binary** outputs (images, blobs) are not rehydrated; they pass
+  through as masked (they were masked before leaving your machine).
+- deeCtx is not a remote proxy or filtering firewall — it is specific to your
+  local model traffic. Full guarantees and caveats: [`ARCHITECTURE.md`](ARCHITECTURE.md) §9 (threat model).
+
+---
+
+## Commands
+
+```bash
+deectx serve --config config.toml    # run the masking proxy
+deectx audit --config config.toml --today          # console summary
+deectx audit --config config.toml --today --export report.json   # JSON export
+```
+
+---
+
+## Audit for compliance
+
+`audit` aggregates the hash-only ledger into totals — masked vs. redacted
+events, alerts, distinct sessions, per-tool / per-entity / per-pack — for DPIA,
+GDPR, or Australian CDR reporting **without exposing personal data**.
+
+---
+
+## Development
+
+```bash
+cargo test        # unit + integration tests
+cargo clippy      # lint
+scripts/release.ps1  (Windows) / scripts/release.sh  → builds zip + computes SHA-256
+```
+
+---
+
+## More
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — the full engineering deep-dive.
+- [shims/README.md](shims/README.md) — Cursor & opencode integration.
+- `scripts/release.*` — release packaging (zip + brew/scoop hashes).
