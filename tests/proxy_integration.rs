@@ -132,6 +132,83 @@ async fn masks_and_rehydrates_anthropic_messages() {
 }
 
 #[tokio::test]
+async fn masks_tool_arguments_on_request() {
+    let (upstream, received) = mock_upstream();
+    let ledger_path = std::env::temp_dir().join(format!("deectx_tools_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream: upstream.clone(),
+        ledger_path,
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", port))
+        .json(&json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": "send the report"},
+                {"role": "assistant", "content": null, "tool_calls": [{"id":"c1","type":"function","function":{"name":"send_report","arguments":"{\"email\":\"jane.doe@example.com\"}"}}]}
+            ]
+        }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let upstream_body = received.lock().unwrap().clone();
+    assert!(upstream_body.contains("[EMAIL_1]"),
+        "tool argument must be masked upstream: {}", upstream_body);
+    assert!(!upstream_body.contains("jane.doe@example.com"),
+        "raw email must not leak upstream: {}", upstream_body);
+}
+
+#[tokio::test]
+async fn masks_anthropic_tool_use_input() {
+    let (up_addr, seen) = mock_upstream_anthropic().await;
+    let ledger_path = std::env::temp_dir().join(format!("deectx_tools_an_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream: format!("http://{up_addr}"),
+        ledger_path,
+        upstream_anthropic: Some(format!("http://{up_addr}")),
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{local}/v1/messages"))
+        .header("x-api-key", "test-key")
+        .header("anthropic-version", "2023-06-01")
+        .json(&json!({
+            "model": "claude-3-7-sonnet",
+            "max_tokens": 64,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "send_report", "input": {"email": "jane.doe@example.com"}}
+                ]
+            }]
+        }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let upstream = seen.lock().unwrap().clone();
+    assert!(upstream.contains("[EMAIL_1]"), "tool_use.input must be masked: {upstream}");
+    assert!(!upstream.contains("jane.doe@example.com"), "tool_use.input leaked: {upstream}");
+}
+
+#[tokio::test]
 async fn streams_sse_with_split_placeholder_rehydrated() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
