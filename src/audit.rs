@@ -50,7 +50,10 @@ pub fn summarize(entries: &[LedgerEntry], date: &str) -> AuditSummary {
     out
 }
 
-pub fn summarize_for_date(ledger_path: &Path, date: chrono::NaiveDate) -> anyhow::Result<AuditSummary> {
+pub fn summarize_for_date(
+    ledger_path: &Path,
+    date: chrono::NaiveDate,
+) -> anyhow::Result<AuditSummary> {
     let entries = Ledger::read_all(ledger_path)?;
     let filtered: Vec<LedgerEntry> = entries
         .into_iter()
@@ -65,7 +68,12 @@ mod tests {
     use crate::ledger::LedgerEvent;
     use chrono::{Duration, Utc};
 
-    fn sample_entry(offset_days: i64, tool: &str, packs: &[&str], events: Vec<LedgerEvent>) -> LedgerEntry {
+    fn sample_entry(
+        offset_days: i64,
+        tool: &str,
+        packs: &[&str],
+        events: Vec<LedgerEvent>,
+    ) -> LedgerEntry {
         LedgerEntry {
             ts: Utc::now() + Duration::days(offset_days),
             tool: tool.to_string(),
@@ -79,12 +87,30 @@ mod tests {
     #[test]
     fn summarize_aggregates_counts() {
         let entries = vec![
-            sample_entry(0, "claude-code", &["gdpr"], vec![
-                LedgerEvent { entity: "iban".into(), placeholder: Some("[IBAN_1]".into()), ph_hash: Some("deadbeef".into()), action: "mask".into(), alert: true },
-            ]),
-            sample_entry(1, "opencode", &["gdpr"], vec![
-                LedgerEvent { entity: "api_key".into(), placeholder: Some("[REDACTED_SECRET]".into()), ph_hash: Some("cafe".into()), action: "redact".into(), alert: false },
-            ]),
+            sample_entry(
+                0,
+                "claude-code",
+                &["gdpr"],
+                vec![LedgerEvent {
+                    entity: "iban".into(),
+                    placeholder: Some("[IBAN_1]".into()),
+                    ph_hash: Some("deadbeef".into()),
+                    action: "mask".into(),
+                    alert: true,
+                }],
+            ),
+            sample_entry(
+                1,
+                "opencode",
+                &["gdpr"],
+                vec![LedgerEvent {
+                    entity: "api_key".into(),
+                    placeholder: Some("[REDACTED_SECRET]".into()),
+                    ph_hash: Some("cafe".into()),
+                    action: "redact".into(),
+                    alert: false,
+                }],
+            ),
         ];
         let s = summarize(&entries, "2026-08-01");
         assert_eq!(s.total_requests, 2);
@@ -102,8 +128,12 @@ mod tests {
         let path = std::env::temp_dir().join(format!("deectx_audit_{}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let ledger = Ledger::new(path.clone(), 90).unwrap();
-        ledger.append(&sample_entry(0, "today", &["default"], vec![])).unwrap();
-        ledger.append(&sample_entry(-1, "yesterday", &["default"], vec![])).unwrap();
+        ledger
+            .append(&sample_entry(0, "today", &["default"], vec![]))
+            .unwrap();
+        ledger
+            .append(&sample_entry(-1, "yesterday", &["default"], vec![]))
+            .unwrap();
         let today = Utc::now().date_naive();
         let summary = summarize_for_date(&path, today).unwrap();
         assert_eq!(summary.total_requests, 1);

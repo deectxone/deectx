@@ -9,7 +9,10 @@ pub struct SseRehydrator {
 
 impl SseRehydrator {
     pub fn new(max_hold: usize) -> Self {
-        Self { pending: Vec::new(), max_hold }
+        Self {
+            pending: Vec::new(),
+            max_hold,
+        }
     }
 
     pub fn push(&mut self, chunk: &[u8], session: &str, masker: &Masker) -> Vec<u8> {
@@ -85,11 +88,15 @@ mod tests {
         let m = masker_with("s1", "jane.doe@example.com and bob.smith@example.com");
         let mut r = SseRehydrator::new(64);
         let a = r.push(b"data: {\"delta\":{\"content\":\"hello [EMA", "s1", &m);
-        assert!(!String::from_utf8_lossy(&a).contains("[EMA"), "prefix leaked: {:?}", a);
+        assert!(
+            !String::from_utf8_lossy(&a).contains("[EMA"),
+            "prefix leaked: {:?}",
+            a
+        );
         let b = r.push(b"IL_1]\"}}\n\ndata: [DONE]\n\n", "s1", &m);
         let out = String::from_utf8(b).unwrap();
         assert!(out.contains("jane.doe@example.com"), "got: {out}");
-        assert!(out.contains("[EMAIL_1]") == false, "placeholder leaked: {out}");
+        assert!(!out.contains("[EMAIL_1]"), "placeholder leaked: {out}");
         let c = r.finish("s1", &m);
         assert!(c.is_empty());
     }
@@ -108,7 +115,10 @@ mod tests {
         let m = Masker::new();
         let mut r = SseRehydrator::new(64);
         let out = r.push(b"just plain text, no secrets", "s1", &m);
-        assert_eq!(String::from_utf8(out).unwrap(), "just plain text, no secrets");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "just plain text, no secrets"
+        );
     }
 
     #[test]
@@ -119,9 +129,19 @@ mod tests {
         let split = 9;
         let a = r.push(&full[..split], "s1", &m);
         let b = r.push(&full[split..], "s1", &m);
-        let joined = format!("{}{}", String::from_utf8_lossy(&a), String::from_utf8_lossy(&b));
-        assert!(joined.contains("wörld"), "multibyte char corrupted: {joined}");
-        assert!(!joined.contains('\u{FFFD}'), "replacement char leaked: {joined}");
+        let joined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&a),
+            String::from_utf8_lossy(&b)
+        );
+        assert!(
+            joined.contains("wörld"),
+            "multibyte char corrupted: {joined}"
+        );
+        assert!(
+            !joined.contains('\u{FFFD}'),
+            "replacement char leaked: {joined}"
+        );
     }
 
     #[test]
@@ -129,23 +149,50 @@ mod tests {
         let m = masker_with("s1", "jane.doe@example.com and bob.smith@example.com");
         let mut r = SseRehydrator::new(64);
         let a = r.push(b"text ends with [EMA", "s1", &m);
-        assert!(!String::from_utf8_lossy(&a).contains("[EMA"), "partial leaked: {:?}", a);
+        assert!(
+            !String::from_utf8_lossy(&a).contains("[EMA"),
+            "partial leaked: {:?}",
+            a
+        );
         let b = r.finish("s1", &m);
-        let out = format!("{}{}", String::from_utf8_lossy(&a), String::from_utf8_lossy(&b));
-        assert!(out.contains("text ends with [EMA"), "partial flushed as-is: {out}");
+        let out = format!(
+            "{}{}",
+            String::from_utf8_lossy(&a),
+            String::from_utf8_lossy(&b)
+        );
+        assert!(
+            out.contains("text ends with [EMA"),
+            "partial flushed as-is: {out}"
+        );
     }
 
     #[test]
     fn non_utf8_stream_pending_is_capped() {
         let m = Masker::new();
         let mut r = SseRehydrator::new(64);
-        let chunk: Vec<u8> = (0..(70 * 1024)).map(|i| [0xFF, 0x00, 0xAA][i % 3]).collect();
+        let chunk: Vec<u8> = (0..(70 * 1024))
+            .map(|i| [0xFF, 0x00, 0xAA][i % 3])
+            .collect();
         let emit = r.push(&chunk, "s1", &m);
-        assert!(!emit.is_empty(), "overflow must flush the oldest bytes immediately");
-        assert!(r.pending.len() <= MAX_PENDING, "pending grew unbounded: {} bytes", r.pending.len());
-        assert_eq!(r.pending.len(), MAX_PENDING, "pending should sit exactly at the cap");
+        assert!(
+            !emit.is_empty(),
+            "overflow must flush the oldest bytes immediately"
+        );
+        assert!(
+            r.pending.len() <= MAX_PENDING,
+            "pending grew unbounded: {} bytes",
+            r.pending.len()
+        );
+        assert_eq!(
+            r.pending.len(),
+            MAX_PENDING,
+            "pending should sit exactly at the cap"
+        );
         let emit2 = r.push(&chunk, "s1", &m);
         assert!(!emit2.is_empty());
-        assert!(r.pending.len() <= MAX_PENDING, "pending must stay capped across the stream");
+        assert!(
+            r.pending.len() <= MAX_PENDING,
+            "pending must stay capped across the stream"
+        );
     }
 }

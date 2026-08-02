@@ -7,7 +7,8 @@ pub struct Allowlist {
 impl Allowlist {
     pub fn new(entries: Vec<String>) -> Self {
         Self {
-            entries: entries.into_iter()
+            entries: entries
+                .into_iter()
                 .map(|e| e.trim().to_lowercase())
                 .filter(|e| !e.is_empty())
                 .collect(),
@@ -19,7 +20,10 @@ impl Allowlist {
     }
 
     pub fn filter(&self, spans: Vec<Span>) -> Vec<Span> {
-        spans.into_iter().filter(|s| !self.is_allowed(&s.text)).collect()
+        spans
+            .into_iter()
+            .filter(|s| !self.is_allowed(&s.text))
+            .collect()
     }
 }
 

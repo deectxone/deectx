@@ -12,9 +12,17 @@ pub struct Masker {
     sessions: Mutex<HashMap<String, SessionMap>>,
 }
 
+impl Default for Masker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Masker {
     pub fn new() -> Self {
-        Self { sessions: Mutex::new(HashMap::new()) }
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn mask_text(&self, session: &str, text: &str, spans: &[Span]) -> String {
@@ -57,7 +65,10 @@ impl Masker {
     /// session, if any. Returns None for redacted secrets (never stored).
     pub fn placeholder_for(&self, session: &str, original: &str) -> Option<String> {
         let sessions = self.sessions.lock().unwrap_or_else(|p| p.into_inner());
-        sessions.get(session).and_then(|m| m.by_original.get(original)).cloned()
+        sessions
+            .get(session)
+            .and_then(|m| m.by_original.get(original))
+            .cloned()
     }
 
     /// Convert placeholders back to original values in `text` for this session.
@@ -130,20 +141,41 @@ mod tests {
         ];
         let masked = m.mask_text("s_1", "a@x.com and b@x.com", &spans);
         assert_eq!(masked, "[EMAIL_1] and [EMAIL_2]");
-        assert_eq!(m.placeholder_for("s_1", "a@x.com"), Some("[EMAIL_1]".to_string()));
-        assert_eq!(m.rehydrate("s_1", "sent to [EMAIL_1] and [EMAIL_2]"),
-                   "sent to a@x.com and b@x.com");
+        assert_eq!(
+            m.placeholder_for("s_1", "a@x.com"),
+            Some("[EMAIL_1]".to_string())
+        );
+        assert_eq!(
+            m.rehydrate("s_1", "sent to [EMAIL_1] and [EMAIL_2]"),
+            "sent to a@x.com and b@x.com"
+        );
     }
 
     #[test]
     fn rehydrate_handles_double_digit_counters() {
         // [EMAIL_10] must not be partially clobbered by [EMAIL_1]
         let m = Masker::new();
-        let spans: Vec<Span> = (1..=10).map(|i| {
-            let start = (i - 1) * 9;
-            Span::new(start, start + 8, "email", Action::Mask, &format!("u{}@x.com", i))
-        }).collect();
-        let masked = m.mask_text("s_1", &spans.iter().map(|s| s.text.clone()).collect::<Vec<_>>().join(" "), &spans);
+        let spans: Vec<Span> = (1..=10)
+            .map(|i| {
+                let start = (i - 1) * 9;
+                Span::new(
+                    start,
+                    start + 8,
+                    "email",
+                    Action::Mask,
+                    &format!("u{}@x.com", i),
+                )
+            })
+            .collect();
+        let masked = m.mask_text(
+            "s_1",
+            &spans
+                .iter()
+                .map(|s| s.text.clone())
+                .collect::<Vec<_>>()
+                .join(" "),
+            &spans,
+        );
         assert!(masked.contains("[EMAIL_10]"));
         let out = m.rehydrate("s_1", &masked);
         assert!(out.contains("u10@x.com"));

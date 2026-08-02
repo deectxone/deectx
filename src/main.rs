@@ -41,10 +41,17 @@ async fn main() -> Result<()> {
             };
             deectx::proxy::run_proxy(cfg).await?;
         }
-        Cmd::Audit { config, today, export } => {
+        Cmd::Audit {
+            config,
+            today,
+            export,
+        } => {
             let cfg = Config::load(&config).unwrap_or_default();
             let summary = if today {
-                deectx::audit::summarize_for_date(&cfg.ledger_path, chrono::Utc::now().date_naive())?
+                deectx::audit::summarize_for_date(
+                    &cfg.ledger_path,
+                    chrono::Utc::now().date_naive(),
+                )?
             } else {
                 let entries = deectx::ledger::Ledger::read_all(&cfg.ledger_path)?;
                 deectx::audit::summarize(&entries, "all")

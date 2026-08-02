@@ -1,5 +1,9 @@
 use crate::config::Config;
-use crate::detect::{regex::{RegexDetector, RegexEntity}, secrets::{SecretsDetector, SecretsEntity}, Detector, DetectorChain};
+use crate::detect::{
+    regex::{RegexDetector, RegexEntity},
+    secrets::{SecretsDetector, SecretsEntity},
+    Detector, DetectorChain,
+};
 use crate::span::Action;
 use anyhow::Result;
 use regex::Regex;
@@ -16,8 +20,12 @@ pub struct Pack {
     pub settings: PackSettings,
 }
 
-fn default_version() -> String { "0.1.0".into() }
-fn default_detector() -> String { "regex".into() }
+fn default_version() -> String {
+    "0.1.0".into()
+}
+fn default_detector() -> String {
+    "regex".into()
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PackEntity {
@@ -87,35 +95,35 @@ impl Pack {
 
 impl Pack {
     pub fn regex_entities(&self) -> Vec<RegexEntity> {
-        self.entities.iter()
+        self.entities
+            .iter()
             .filter(|e| e.detector == "regex")
-            .filter_map(|e| {
-                match Regex::new(e.pattern.as_deref().unwrap_or("")) {
-                    Ok(pattern) => Some(RegexEntity {
-                        id: e.id.clone(),
-                        pattern,
-                        action: e.action,
-                        checksum: match e.checksum.as_deref() {
-                            Some("luhn") => Some(crate::detect::regex::Checksum::Luhn),
-                            Some("mod97") => Some(crate::detect::regex::Checksum::Mod97),
-                            Some("ato_tfn") => Some(crate::detect::regex::Checksum::AtoTfn),
-                            _ => None,
-                        },
-                        alert: e.alert,
-                    }),
-                    Err(err) => {
-                        tracing::warn!("pack entity {} has invalid regex: {err}", e.id);
-                        None
-                    }
+            .filter_map(|e| match Regex::new(e.pattern.as_deref().unwrap_or("")) {
+                Ok(pattern) => Some(RegexEntity {
+                    id: e.id.clone(),
+                    pattern,
+                    action: e.action,
+                    checksum: match e.checksum.as_deref() {
+                        Some("luhn") => Some(crate::detect::regex::Checksum::Luhn),
+                        Some("mod97") => Some(crate::detect::regex::Checksum::Mod97),
+                        Some("ato_tfn") => Some(crate::detect::regex::Checksum::AtoTfn),
+                        _ => None,
+                    },
+                    alert: e.alert,
+                }),
+                Err(err) => {
+                    tracing::warn!("pack entity {} has invalid regex: {err}", e.id);
+                    None
                 }
             })
             .collect()
     }
 
     pub fn secrets_entities(&self) -> Vec<SecretsEntity> {
-        self.entities.iter()
+        self.entities
+            .iter()
             .filter(|e| e.detector == "secrets")
-            .filter_map(|e| {
+            .map(|e| {
                 let mut patterns = Vec::new();
                 if let Some(p) = &e.pattern {
                     match Regex::new(p) {
@@ -129,13 +137,13 @@ impl Pack {
                         Err(err) => tracing::warn!("pack entity {} has invalid regex: {err}", e.id),
                     }
                 }
-                Some(SecretsEntity {
+                SecretsEntity {
                     id: e.id.clone(),
                     patterns,
                     entropy_min: e.entropy_min,
                     action: e.action,
                     alert: e.alert,
-                })
+                }
             })
             .collect()
     }
@@ -183,22 +191,30 @@ struct NotReadyDetector;
 
 #[cfg(not(feature = "ner"))]
 impl Detector for NotReadyDetector {
-    fn detect(&self, _text: &str) -> Vec<crate::span::Span> { Vec::new() }
-    fn ready(&self) -> bool { false }
+    fn detect(&self, _text: &str) -> Vec<crate::span::Span> {
+        Vec::new()
+    }
+    fn ready(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(all(test, not(feature = "ner")))]
 #[test]
 fn ner_requested_without_feature_is_not_ready_for_fail_closed_gate() {
     let chain = build_chain(&[Pack::builtin_default()], true, PathBuf::new());
-    assert!(!chain.ready(), "ner:true without the ner feature must not report ready");
+    assert!(
+        !chain.ready(),
+        "ner:true without the ner feature must not report ready"
+    );
     let ok = build_chain(&[Pack::builtin_default()], false, PathBuf::new());
     assert!(ok.ready(), "ner disabled keeps chain ready");
 }
 
 #[cfg(feature = "ner")]
 fn ner_labels(pack: &Pack) -> Vec<(String, Action, bool)> {
-    pack.entities.iter()
+    pack.entities
+        .iter()
         .filter(|e| e.detector == "ner")
         .map(|e| (e.id.clone(), e.action, e.alert))
         .collect()
@@ -207,11 +223,14 @@ fn ner_labels(pack: &Pack) -> Vec<(String, Action, bool)> {
 pub fn load_active(cfg: &Config) -> Vec<Pack> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut push = |p: Pack, out: &mut Vec<Pack>, seen: &mut std::collections::HashSet<String>| {
+    let push = |p: Pack, out: &mut Vec<Pack>, seen: &mut std::collections::HashSet<String>| {
         if seen.insert(p.name.clone()) {
             out.push(p);
         } else {
-            tracing::warn!("pack '{}' skipped: a pack with that name is already active", p.name);
+            tracing::warn!(
+                "pack '{}' skipped: a pack with that name is already active",
+                p.name
+            );
         }
     };
     push(Pack::builtin_default(), &mut out, &mut seen);
@@ -229,7 +248,10 @@ pub fn load_active(cfg: &Config) -> Vec<Pack> {
                     }
                 }
             }
-            Err(e) => tracing::warn!("packs_dir {} unreadable, running default pack only: {e}", dir.display()),
+            Err(e) => tracing::warn!(
+                "packs_dir {} unreadable, running default pack only: {e}",
+                dir.display()
+            ),
         }
     }
     out
@@ -258,8 +280,9 @@ mod tests {
     #[test]
     fn load_round_trips_sample_yaml() {
         let dir = std::env::temp_dir().join(format!("deectx_pack_{}.yaml", std::process::id()));
-        std::fs::write(&dir,
-r#"name: sample
+        std::fs::write(
+            &dir,
+            r#"name: sample
 version: 0.1.0
 entities:
   - id: phone
@@ -274,7 +297,9 @@ entities:
 settings:
   failClosed: true
   allow: ["info@example.com"]
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let p = Pack::load(&dir).unwrap();
         assert_eq!(p.name, "sample");
         assert_eq!(p.entities.len(), 2);
@@ -302,24 +327,45 @@ settings:
         let p = Pack::builtin_pack("gdpr").expect("gdpr.yaml must parse");
         assert_eq!(p.name, "gdpr");
         assert!(!p.settings.fail_closed);
-        let iban = p.entities.iter().find(|e| e.id == "iban").expect("iban entity");
+        let iban = p
+            .entities
+            .iter()
+            .find(|e| e.id == "iban")
+            .expect("iban entity");
         assert_eq!(iban.checksum.as_deref(), Some("mod97"));
-        let person = p.entities.iter().find(|e| e.id == "person").expect("person entity");
+        let person = p
+            .entities
+            .iter()
+            .find(|e| e.id == "person")
+            .expect("person entity");
         assert_eq!(person.detector, "ner");
-        assert!(p.entities.iter().any(|e| e.detector == "ner" && e.alert), "Art 9 categories must alert");
+        assert!(
+            p.entities.iter().any(|e| e.detector == "ner" && e.alert),
+            "Art 9 categories must alert"
+        );
         let re = p.regex_entities();
-        assert!(re.iter().any(|e| e.id == "iban" && matches!(e.checksum, Some(crate::detect::regex::Checksum::Mod97))));
+        assert!(re
+            .iter()
+            .any(|e| e.id == "iban"
+                && matches!(e.checksum, Some(crate::detect::regex::Checksum::Mod97))));
     }
 
     #[test]
     fn loads_cdr_au_builtin_with_ato_tfn() {
         let p = Pack::builtin_pack("cdr-au").expect("cdr-au.yaml must parse");
         assert_eq!(p.name, "cdr-au");
-        let tfn = p.entities.iter().find(|e| e.id == "tfn").expect("tfn entity");
+        let tfn = p
+            .entities
+            .iter()
+            .find(|e| e.id == "tfn")
+            .expect("tfn entity");
         assert_eq!(tfn.checksum.as_deref(), Some("ato_tfn"));
         assert!(tfn.alert);
         let re = p.regex_entities();
-        assert!(re.iter().any(|e| e.id == "tfn" && matches!(e.checksum, Some(crate::detect::regex::Checksum::AtoTfn))));
+        assert!(re
+            .iter()
+            .any(|e| e.id == "tfn"
+                && matches!(e.checksum, Some(crate::detect::regex::Checksum::AtoTfn))));
         assert!(p.entities.iter().any(|e| e.id == "medicare_number"));
         assert!(p.entities.iter().any(|e| e.id == "bsb_account"));
         assert!(p.entities.iter().any(|e| e.id == "passport_au"));
@@ -332,12 +378,18 @@ settings:
 
     #[test]
     fn load_active_dedups_and_includes_named_builtins() {
-        let mut cfg = crate::config::Config::default();
-        cfg.active_packs = vec!["gdpr".into(), "gdpr".into()];
+        let cfg = crate::config::Config {
+            active_packs: vec!["gdpr".into(), "gdpr".into()],
+            ..Default::default()
+        };
         let packs = crate::packs::load_active(&cfg);
         let names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
         assert!(names.contains(&"default".to_string()));
-        assert_eq!(names.iter().filter(|n| *n == "gdpr").count(), 1, "no dup: {names:?}");
+        assert_eq!(
+            names.iter().filter(|n| *n == "gdpr").count(),
+            1,
+            "no dup: {names:?}"
+        );
     }
 
     #[test]
@@ -358,7 +410,11 @@ settings:
             .into_iter()
             .filter(|s| s.entity == "iban")
             .collect();
-        assert_eq!(ibans.len(), 2, "both IBAN forms must be detected end-to-end, got {ibans:?}");
+        assert_eq!(
+            ibans.len(),
+            2,
+            "both IBAN forms must be detected end-to-end, got {ibans:?}"
+        );
         assert_eq!(ibans[0].text, "DE89370400440532013000");
         assert_eq!(ibans[1].text, "DE89 3704 0044 0532 0130 00");
     }
