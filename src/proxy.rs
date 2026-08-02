@@ -106,29 +106,7 @@ async fn handle_completion(
     };
     let session = session_id(&json);
     let mut events = Vec::new();
-    match format {
-        ApiFormat::OpenAI => {
-            if let Some(msgs) = json["messages"].as_array_mut() {
-                for m in msgs {
-                    if let Some(c) = m.get_mut("content") {
-                        mask_walk(&st, &session, &mut events, c);
-                    }
-                }
-            }
-        }
-        ApiFormat::Anthropic => {
-            if let Some(sys) = json.get_mut("system") {
-                mask_walk(&st, &session, &mut events, sys);
-            }
-            if let Some(msgs) = json["messages"].as_array_mut() {
-                for m in msgs {
-                    if let Some(c) = m.get_mut("content") {
-                        mask_walk(&st, &session, &mut events, c);
-                    }
-                }
-            }
-        }
-    }
+    mask_walk(&st, &session, &mut events, &mut json);
     let stream = json.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
     let out = serde_json::to_vec(&json).unwrap_or_else(|_| body.to_vec());
     let resp = forward_raw(&st, format, headers, Bytes::from(out), Some(&session), stream).await;
@@ -155,22 +133,39 @@ fn mask_walk(
     events: &mut Vec<LedgerEvent>,
     value: &mut serde_json::Value,
 ) -> bool {
-    let mut changed = false;
-    if let Some(s) = value.as_str() {
-        if let Some(masked) = mask_content(st, session, s, events) {
-            *value = serde_json::Value::String(masked);
-            changed = true;
-        }
-    } else if let Some(arr) = value.as_array_mut() {
-        for item in arr.iter_mut() {
-            if let Some(obj) = item.as_object_mut() {
-                if let Some(txt) = obj.get_mut("text") {
-                    changed |= mask_walk(st, session, events, txt);
+    match value {
+        serde_json::Value::String(s) => {
+            let mut changed = false;
+            // Tool arguments are JSON-encoded strings (OpenAI function.arguments);
+            // recurse into the decoded value so nested PII is caught too.
+            if let Ok(mut inner) = serde_json::from_str::<serde_json::Value>(s) {
+                if mask_walk(st, session, events, &mut inner) {
+                    *s = inner.to_string();
+                    changed = true;
                 }
             }
+            if let Some(masked) = mask_content(st, session, s, events) {
+                *s = masked;
+                changed = true;
+            }
+            changed
         }
+        serde_json::Value::Array(arr) => {
+            let mut changed = false;
+            for item in arr.iter_mut() {
+                changed |= mask_walk(st, session, events, item);
+            }
+            changed
+        }
+        serde_json::Value::Object(obj) => {
+            let mut changed = false;
+            for (_, v) in obj.iter_mut() {
+                changed |= mask_walk(st, session, events, v);
+            }
+            changed
+        }
+        _ => false,
     }
-    changed
 }
 
 fn mask_content(
