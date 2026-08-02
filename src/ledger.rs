@@ -45,13 +45,10 @@ impl Ledger {
 
     pub fn append(&self, entry: &LedgerEntry) -> io::Result<()> {
         let entry_date = entry.ts.date_naive();
-        let needs_rotate = {
-            let cur = self.current_date.lock().unwrap_or_else(|p| p.into_inner());
-            *cur != entry_date
-        };
-        if needs_rotate {
-            self.rotate_to(entry_date)?;
-            *self.current_date.lock().unwrap_or_else(|p| p.into_inner()) = entry_date;
+        let mut cur = self.current_date.lock().unwrap_or_else(|p| p.into_inner());
+        if *cur != entry_date {
+            self.rotate_to(entry_date, *cur)?;
+            *cur = entry_date;
         }
         let mut line = serde_json::to_string(entry).map_err(io::Error::other)?;
         line.push('\n');
@@ -62,8 +59,7 @@ impl Ledger {
         }
     }
 
-    fn rotate_to(&self, new_date: NaiveDate) -> io::Result<()> {
-        let old_date = *self.current_date.lock().unwrap_or_else(|p| p.into_inner());
+    fn rotate_to(&self, new_date: NaiveDate, old_date: NaiveDate) -> io::Result<()> {
         self.file.lock().unwrap_or_else(|p| p.into_inner()).take();
         if old_date != new_date {
             let rotated = rotated_path(&self.base, old_date);
