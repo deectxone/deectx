@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "command": ".cursor/hooks/deectx-gate.sh",
+        "timeout": 3,
+        "matcher": "Shell|Read|Write|Edit",
+        "failClosed": true
+      }
+    ]
+  }
+}

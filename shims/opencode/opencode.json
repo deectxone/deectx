@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "deectx": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "deeCtx (masked)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8787/v1"
+      },
+      "models": {
+        "gpt-4o": { "name": "GPT-4o via deeCtx" }
+      }
+    }
+  }
+}
