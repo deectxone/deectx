@@ -101,6 +101,7 @@ impl Pack {
                             Some("ato_tfn") => Some(crate::detect::regex::Checksum::AtoTfn),
                             _ => None,
                         },
+                        alert: e.alert,
                     }),
                     Err(err) => {
                         tracing::warn!("pack entity {} has invalid regex: {err}", e.id);
@@ -133,6 +134,7 @@ impl Pack {
                     patterns,
                     entropy_min: e.entropy_min,
                     action: e.action,
+                    alert: e.alert,
                 })
             })
             .collect()
@@ -168,10 +170,10 @@ pub fn build_chain(packs: &[Pack], ner_enabled: bool, model_dir: PathBuf) -> Det
 }
 
 #[cfg(feature = "ner")]
-fn ner_labels(pack: &Pack) -> Vec<(String, Action)> {
+fn ner_labels(pack: &Pack) -> Vec<(String, Action, bool)> {
     pack.entities.iter()
         .filter(|e| e.detector == "ner")
-        .map(|e| (e.id.clone(), e.action))
+        .map(|e| (e.id.clone(), e.action, e.alert))
         .collect()
 }
 

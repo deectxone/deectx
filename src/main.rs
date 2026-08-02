@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
                     println!("  requests: {}", summary.total_requests);
                     println!("  masked events: {}", summary.masked_events);
                     println!("  redacted events: {}", summary.redacted_events);
+                    println!("  alerts: {}", summary.alerts);
                     println!("  distinct sessions: {}", summary.distinct_sessions);
                     for (k, v) in &summary.entities {
                         println!("  entity {k}: {v}");

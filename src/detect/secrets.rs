@@ -8,11 +8,12 @@ pub struct SecretsEntity {
     pub patterns: Vec<Regex>,
     pub entropy_min: Option<f64>,
     pub action: Action,
+    pub alert: bool,
 }
 
 pub struct SecretsDetector {
-    entities: Vec<(String, Vec<Regex>, Action)>,
-    entropy: Option<(String, Regex, f64, Action)>,
+    entities: Vec<(String, Vec<Regex>, Action, bool)>,
+    entropy: Option<(String, Regex, f64, Action, bool)>,
 }
 
 impl SecretsDetector {
@@ -20,7 +21,7 @@ impl SecretsDetector {
         let mut out = Self { entities: Vec::new(), entropy: None };
         for e in entities {
             if !e.patterns.is_empty() {
-                out.entities.push((e.id.clone(), e.patterns, e.action));
+                out.entities.push((e.id.clone(), e.patterns, e.action, e.alert));
             }
             if e.entropy_min.is_some() && out.entropy.is_none() {
                 out.entropy = Some((
@@ -28,6 +29,7 @@ impl SecretsDetector {
                     Regex::new(r"\b[A-Za-z0-9/+_=.-]{21,}\b").unwrap(),
                     e.entropy_min.unwrap(),
                     e.action,
+                    e.alert,
                 ));
             }
         }
@@ -48,17 +50,17 @@ pub(crate) fn shannon_entropy(s: &str) -> f64 {
 impl Detector for SecretsDetector {
     fn detect(&self, text: &str) -> Vec<Span> {
         let mut out = Vec::new();
-        for (id, patterns, action) in &self.entities {
+        for (id, patterns, action, alert) in &self.entities {
             for pat in patterns {
                 for m in pat.find_iter(text) {
-                    out.push(Span::new(m.start(), m.end(), id, *action, m.as_str()));
+                    out.push(Span { alert: *alert, ..Span::new(m.start(), m.end(), id, *action, m.as_str()) });
                 }
             }
         }
-        if let Some((id, re, min, action)) = &self.entropy {
+        if let Some((id, re, min, action, alert)) = &self.entropy {
             for m in re.find_iter(text) {
                 if shannon_entropy(m.as_str()) > *min {
-                    out.push(Span::new(m.start(), m.end(), id, *action, m.as_str()));
+                    out.push(Span { alert: *alert, ..Span::new(m.start(), m.end(), id, *action, m.as_str()) });
                 }
             }
         }
@@ -80,6 +82,7 @@ mod tests {
             ],
             entropy_min: Some(4.5),
             action: Action::Redact,
+            alert: false,
         }])
     }
 
@@ -109,6 +112,7 @@ mod tests {
             patterns: vec![Regex::new(r"ghp_[A-Za-z0-9]{36}").unwrap()],
             entropy_min: None,
             action: Action::Redact,
+            alert: false,
         }]);
         // 21+ char bare token with high entropy is NOT flagged without entropy_min
         assert!(d.detect("token x9Kf2mQ8vLp3nR7sW1yZ4bN6cD").is_empty());
