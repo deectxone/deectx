@@ -181,6 +181,8 @@ pub fn load_active(cfg: &Config) -> Vec<Pack> {
     let mut push = |p: Pack, out: &mut Vec<Pack>, seen: &mut std::collections::HashSet<String>| {
         if seen.insert(p.name.clone()) {
             out.push(p);
+        } else {
+            tracing::warn!("pack '{}' skipped: a pack with that name is already active", p.name);
         }
     };
     push(Pack::builtin_default(), &mut out, &mut seen);
@@ -315,5 +317,20 @@ settings:
         let packs = crate::packs::load_active(&cfg);
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].name, "default");
+    }
+
+    #[test]
+    fn gdpr_pack_chain_detects_canonical_and_space_formatted_ibans() {
+        let pack = Pack::builtin_pack("gdpr").expect("gdpr.yaml must parse");
+        let chain = build_chain(&[pack], false, PathBuf::new());
+        let text = "IBAN DE89370400440532013000 and DE89 3704 0044 0532 0130 00";
+        let ibans: Vec<_> = chain
+            .detect(text)
+            .into_iter()
+            .filter(|s| s.entity == "iban")
+            .collect();
+        assert_eq!(ibans.len(), 2, "both IBAN forms must be detected end-to-end, got {ibans:?}");
+        assert_eq!(ibans[0].text, "DE89370400440532013000");
+        assert_eq!(ibans[1].text, "DE89 3704 0044 0532 0130 00");
     }
 }

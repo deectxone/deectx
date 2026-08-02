@@ -54,7 +54,7 @@ entities:
     action: mask
   - id: iban
     detector: regex
-    pattern: '\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}\b'
+    pattern: '\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7} ?[A-Z0-9]{1,3}\b'
     checksum: mod97
     action: mask
 settings:

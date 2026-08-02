@@ -1,5 +1,7 @@
 use crate::masker::Masker;
 
+const MAX_PENDING: usize = 64 * 1024;
+
 pub struct SseRehydrator {
     pending: Vec<u8>,
     max_hold: usize,
@@ -13,6 +15,11 @@ impl SseRehydrator {
     pub fn push(&mut self, chunk: &[u8], session: &str, masker: &Masker) -> Vec<u8> {
         self.pending.extend_from_slice(chunk);
         let emit_len = self.emit_len();
+        // Hard cap: a non-UTF-8 stream collapses emit_len to 0, which would
+        // otherwise buffer the whole body in memory. When pending exceeds the
+        // bound, flush the oldest bytes through immediately (raw rehydrate)
+        // regardless of placeholder-prefix status so memory stays bounded.
+        let emit_len = self.pending.len().saturating_sub(MAX_PENDING).max(emit_len);
         let tail = self.pending.split_off(emit_len);
         let emit = std::mem::take(&mut self.pending);
         self.pending = tail;
@@ -126,5 +133,19 @@ mod tests {
         let b = r.finish("s1", &m);
         let out = format!("{}{}", String::from_utf8_lossy(&a), String::from_utf8_lossy(&b));
         assert!(out.contains("text ends with [EMA"), "partial flushed as-is: {out}");
+    }
+
+    #[test]
+    fn non_utf8_stream_pending_is_capped() {
+        let m = Masker::new();
+        let mut r = SseRehydrator::new(64);
+        let chunk: Vec<u8> = (0..(70 * 1024)).map(|i| [0xFF, 0x00, 0xAA][i % 3]).collect();
+        let emit = r.push(&chunk, "s1", &m);
+        assert!(!emit.is_empty(), "overflow must flush the oldest bytes immediately");
+        assert!(r.pending.len() <= MAX_PENDING, "pending grew unbounded: {} bytes", r.pending.len());
+        assert_eq!(r.pending.len(), MAX_PENDING, "pending should sit exactly at the cap");
+        let emit2 = r.push(&chunk, "s1", &m);
+        assert!(!emit2.is_empty());
+        assert!(r.pending.len() <= MAX_PENDING, "pending must stay capped across the stream");
     }
 }
