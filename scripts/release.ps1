@@ -19,19 +19,19 @@ $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 $manifest = @{
   version = "0.1.0"
   description = "Local-first PII-masking proxy for AI coding tools"
-  homepage = "https://github.com/deectx/deectx"
+  homepage = "https://github.com/deectxone/deectx"
   license = "Apache-2.0"
   architecture = @{
     "64bit" = @{
-      url = "https://github.com/deectx/deectx/releases/download/v0.1.0/deectx-x86_64-pc-windows-msvc.zip"
+      url = "https://github.com/deectxone/deectx/releases/download/v0.1.0/deectx-x86_64-pc-windows-msvc.zip"
       hash = $hash
     }
   }
   bin = "deectx.exe"
-  checkver = @{ github = "https://github.com/deectx/deectx" }
+  checkver = @{ github = "https://github.com/deectxone/deectx" }
   autoupdate = @{
     architecture = @{
-      "64bit" = @{ url = "https://github.com/deectx/deectx/releases/download/v`$version/deectx-x86_64-pc-windows-msvc.zip" }
+      "64bit" = @{ url = "https://github.com/deectxone/deectx/releases/download/v`$version/deectx-x86_64-pc-windows-msvc.zip" }
     }
   }
 } | ConvertTo-Json -Depth 5

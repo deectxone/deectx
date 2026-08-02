@@ -4,20 +4,20 @@
     "autoupdate":  {
                        "architecture":  {
                                             "64bit":  {
-                                                          "url":  "https://github.com/deectx/deectx/releases/download/v$version/deectx-x86_64-pc-windows-msvc.zip"
+                                                          "url":  "https://github.com/deectxone/deectx/releases/download/v$version/deectx-x86_64-pc-windows-msvc.zip"
                                                       }
                                         }
                    },
     "architecture":  {
                          "64bit":  {
                                        "hash":  "f3c8d769e9f6c57431065ab40340fe96eaabdf228de951ed3f82d617a9bf8b8d",
-                                       "url":  "https://github.com/deectx/deectx/releases/download/v0.1.0/deectx-x86_64-pc-windows-msvc.zip"
+                                       "url":  "https://github.com/deectxone/deectx/releases/download/v0.1.0/deectx-x86_64-pc-windows-msvc.zip"
                                    }
                      },
     "description":  "Local-first PII-masking proxy for AI coding tools",
     "checkver":  {
-                     "github":  "https://github.com/deectx/deectx"
+                     "github":  "https://github.com/deectxone/deectx"
                  },
-    "homepage":  "https://github.com/deectx/deectx",
+    "homepage":  "https://github.com/deectxone/deectx",
     "bin":  "deectx.exe"
 }

@@ -1,6 +1,6 @@
 class Deectx < Formula
   desc "Local-first PII-masking proxy for AI coding tools"
-  homepage "https://github.com/deectx/deectx"
+  homepage "https://github.com/deectxone/deectx"
   url "https://crates.io/api/v1/crates/deectx/0.1.0/download"
   sha256 "fill-from-release"
   license "Apache-2.0"
