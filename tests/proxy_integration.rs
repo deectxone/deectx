@@ -254,3 +254,45 @@ async fn streams_sse_with_split_placeholder_rehydrated() {
     assert!(text.contains("jane.doe@example.com"), "split placeholder must be rehydrated: {text}");
     assert!(!text.contains("[EMAIL_1]"), "placeholder leaked into stream: {text}");
 }
+
+#[cfg(feature = "ner")]
+#[tokio::test]
+async fn fail_closed_pack_blocks_when_ner_model_missing() {
+    let pack_dir = std::env::temp_dir().join(format!("deectx_strict_{}", std::process::id()));
+    std::fs::create_dir_all(&pack_dir).unwrap();
+    std::fs::write(pack_dir.join("strict.yaml"), r#"name: strict
+version: 0.1.0
+entities:
+  - id: person
+    detector: ner
+    labels: [person]
+    action: mask
+settings:
+  failClosed: true
+"#).unwrap();
+
+    let (upstream, _received) = mock_upstream();
+    let ledger_path = std::env::temp_dir().join(format!("deectx_fc_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream,
+        ledger_path,
+        active_packs: vec!["strict".into()],
+        packs_dir: Some(pack_dir.clone()),
+        model_dir: Some(std::path::PathBuf::from("./definitely-missing-models")),
+        ner: true,
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", port))
+        .json(&json!({"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 503, "failClosed must block when NER model is unavailable");
+    let _ = std::fs::remove_dir_all(&pack_dir);
+}

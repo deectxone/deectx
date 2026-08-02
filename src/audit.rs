@@ -8,6 +8,7 @@ pub struct AuditSummary {
     pub total_requests: usize,
     pub masked_events: usize,
     pub redacted_events: usize,
+    pub alerts: usize,
     pub distinct_sessions: usize,
     pub tools: BTreeMap<String, usize>,
     pub entities: BTreeMap<String, usize>,
@@ -20,6 +21,7 @@ pub fn summarize(entries: &[LedgerEntry], date: &str) -> AuditSummary {
         total_requests: entries.len(),
         masked_events: 0,
         redacted_events: 0,
+        alerts: 0,
         distinct_sessions: 0,
         tools: BTreeMap::new(),
         entities: BTreeMap::new(),
@@ -37,6 +39,9 @@ pub fn summarize(entries: &[LedgerEntry], date: &str) -> AuditSummary {
                 "mask" => out.masked_events += 1,
                 "redact" => out.redacted_events += 1,
                 _ => {}
+            }
+            if ev.alert {
+                out.alerts += 1;
             }
             *out.entities.entry(ev.entity.clone()).or_insert(0) += 1;
         }
@@ -75,10 +80,10 @@ mod tests {
     fn summarize_aggregates_counts() {
         let entries = vec![
             sample_entry(0, "claude-code", &["gdpr"], vec![
-                LedgerEvent { entity: "iban".into(), placeholder: Some("[IBAN_1]".into()), ph_hash: Some("deadbeef".into()), action: "mask".into() },
+                LedgerEvent { entity: "iban".into(), placeholder: Some("[IBAN_1]".into()), ph_hash: Some("deadbeef".into()), action: "mask".into(), alert: true },
             ]),
             sample_entry(1, "opencode", &["gdpr"], vec![
-                LedgerEvent { entity: "api_key".into(), placeholder: Some("[REDACTED_SECRET]".into()), ph_hash: Some("cafe".into()), action: "redact".into() },
+                LedgerEvent { entity: "api_key".into(), placeholder: Some("[REDACTED_SECRET]".into()), ph_hash: Some("cafe".into()), action: "redact".into(), alert: false },
             ]),
         ];
         let s = summarize(&entries, "2026-08-01");
@@ -89,6 +94,7 @@ mod tests {
         assert_eq!(s.entities.get("iban"), Some(&1));
         assert_eq!(s.packs.get("gdpr"), Some(&2));
         assert_eq!(s.tools.get("claude-code"), Some(&1));
+        assert_eq!(s.alerts, 1);
     }
 
     #[test]

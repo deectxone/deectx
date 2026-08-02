@@ -22,6 +22,7 @@ struct AppState {
     http: reqwest::Client,
     packs: Vec<String>,
     allowlist: crate::allowlist::Allowlist,
+    fail_closed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +54,7 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
         http: reqwest::Client::new(),
         packs: pack_names,
         allowlist,
+        fail_closed: packs.iter().any(|p| p.settings.fail_closed),
     });
     let app = Router::new()
         .route("/v1/chat/completions", axum::routing::post(handle_chat_openai))
@@ -105,6 +107,13 @@ async fn handle_completion(
         Err(_) => return forward_raw(&st, format, headers, body, None, false).await,
     };
     let session = session_id(&json);
+    if st.fail_closed && !st.chain.ready() {
+        tracing::warn!("failClosed enforcement: a required detector (NER model) is unavailable; refusing request");
+        return Response::builder()
+            .status(503)
+            .body(Body::from("deeCtx: failClosed enforcement — masking cannot be guaranteed"))
+            .unwrap();
+    }
     let mut events = Vec::new();
     mask_walk(&st, &session, &mut events, &mut json);
     let stream = json.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
@@ -180,6 +189,9 @@ fn mask_content(
     }
     let masked = st.masker.mask_text(session, content, &spans);
     for s in &spans {
+        if s.alert {
+            tracing::warn!("deeCtx ALERT: '{}' entity detected (masked/redacted; see ledger)", s.entity);
+        }
         let ph = match s.action {
             Action::Mask => st.masker.placeholder_for(session, &s.text),
             Action::Redact => Some("[REDACTED_SECRET]".to_string()),
@@ -189,6 +201,7 @@ fn mask_content(
             placeholder: ph.clone(),
             ph_hash: ph.as_ref().map(|p| sha256_hex(p)),
             action: if matches!(s.action, Action::Mask) { "mask".into() } else { "redact".into() },
+            alert: s.alert,
         });
     }
     Some(masked)

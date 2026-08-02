@@ -7,6 +7,7 @@ use crate::span::Span;
 
 pub trait Detector: Send + Sync {
     fn detect(&self, text: &str) -> Vec<Span>;
+    fn ready(&self) -> bool { true }
 }
 
 pub struct DetectorChain {
@@ -29,6 +30,10 @@ impl DetectorChain {
             }
         }
         out
+    }
+
+    pub fn ready(&self) -> bool {
+        self.detectors.iter().all(|d| d.ready())
     }
 }
 
@@ -55,5 +60,19 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].entity, "long");
         assert_eq!(spans[1].entity, "other");
+    }
+
+    struct NotReady;
+    impl Detector for NotReady {
+        fn detect(&self, _t: &str) -> Vec<Span> { vec![] }
+        fn ready(&self) -> bool { false }
+    }
+
+    #[test]
+    fn chain_ready_is_false_when_any_detector_is_not_ready() {
+        let chain = DetectorChain::new(vec![Box::new(Fake), Box::new(NotReady)]);
+        assert!(!chain.ready());
+        let ok = DetectorChain::new(vec![Box::new(Fake)]);
+        assert!(ok.ready());
     }
 }

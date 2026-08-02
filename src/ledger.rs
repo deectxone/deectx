@@ -11,6 +11,8 @@ pub struct LedgerEvent {
     pub placeholder: Option<String>,
     pub ph_hash: Option<String>,
     pub action: String,
+    #[serde(default)]
+    pub alert: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -160,6 +162,7 @@ mod tests {
                 placeholder: Some("[EMAIL_1]".into()),
                 ph_hash: Some(sha256_hex("[EMAIL_1]")),
                 action: "mask".into(),
+                alert: false,
             }],
             latency_ms: 3,
             packs: vec!["default".into()],
@@ -228,5 +231,15 @@ mod tests {
         assert!(recent.exists(), "recent rotated file must be kept");
         assert!(base.exists(), "base file must be kept");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn alert_field_round_trips() {
+        let line = r#"{"ts":"2026-08-01T00:00:00Z","tool":"t","session":"s","events":[{"entity":"iban","placeholder":"[IBAN_1]","ph_hash":"h","action":"mask","alert":true}],"latency_ms":1,"packs":[]}"#;
+        let e: LedgerEntry = serde_json::from_str(line).unwrap();
+        assert!(e.events[0].alert);
+        let old = r#"{"ts":"2026-08-01T00:00:00Z","tool":"t","session":"s","events":[{"entity":"iban","placeholder":"[IBAN_1]","ph_hash":"h","action":"mask"}],"latency_ms":1,"packs":[]}"#;
+        let e2: LedgerEntry = serde_json::from_str(old).unwrap();
+        assert!(!e2.events[0].alert, "old entries without alert must default to false");
     }
 }

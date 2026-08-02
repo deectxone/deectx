@@ -14,6 +14,7 @@ pub struct RegexEntity {
     pub pattern: Regex,
     pub action: Action,
     pub checksum: Option<Checksum>,
+    pub alert: bool,
 }
 
 pub struct RegexDetector {
@@ -43,7 +44,7 @@ impl Detector for RegexDetector {
                 if !valid {
                     continue;
                 }
-                out.push(Span::new(m.start(), m.end(), &e.id, e.action, m.as_str()));
+                out.push(Span { alert: e.alert, ..Span::new(m.start(), m.end(), &e.id, e.action, m.as_str()) });
             }
         }
         out
@@ -101,10 +102,10 @@ mod tests {
 
     fn test_detector() -> RegexDetector {
         RegexDetector::from_entities(vec![
-            RegexEntity { id: "email".into(), pattern: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap(), action: Action::Mask, checksum: None },
-            RegexEntity { id: "credit_card".into(), pattern: Regex::new(r"\b(?:\d[ -]?){13,19}\b").unwrap(), action: Action::Mask, checksum: Some(Checksum::Luhn) },
-            RegexEntity { id: "iban".into(), pattern: Regex::new(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}[A-Z0-9]{1,3}\b").unwrap(), action: Action::Mask, checksum: Some(Checksum::Mod97) },
-            RegexEntity { id: "tfn".into(), pattern: Regex::new(r"\b\d{8,9}\b").unwrap(), action: Action::Mask, checksum: Some(Checksum::AtoTfn) },
+            RegexEntity { id: "email".into(), pattern: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap(), action: Action::Mask, checksum: None, alert: false },
+            RegexEntity { id: "credit_card".into(), pattern: Regex::new(r"\b(?:\d[ -]?){13,19}\b").unwrap(), action: Action::Mask, checksum: Some(Checksum::Luhn), alert: false },
+            RegexEntity { id: "iban".into(), pattern: Regex::new(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}[A-Z0-9]{1,3}\b").unwrap(), action: Action::Mask, checksum: Some(Checksum::Mod97), alert: false },
+            RegexEntity { id: "tfn".into(), pattern: Regex::new(r"\b\d{8,9}\b").unwrap(), action: Action::Mask, checksum: Some(Checksum::AtoTfn), alert: false },
         ])
     }
 
@@ -145,7 +146,7 @@ mod tests {
     #[test]
     fn detects_multiple_entities_with_different_actions() {
         let d = RegexDetector::from_entities(vec![
-            RegexEntity { id: "ip".into(), pattern: Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap(), action: Action::Redact, checksum: None },
+            RegexEntity { id: "ip".into(), pattern: Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap(), action: Action::Redact, checksum: None, alert: false },
         ]);
         let spans = d.detect("host 10.0.0.1 reachable");
         assert_eq!(spans.len(), 1);
@@ -165,5 +166,16 @@ mod tests {
         assert!(!ato_tfn_valid(""));
         assert!(!ato_tfn_valid("1234567"));
         assert!(!ato_tfn_valid("1234567890"));
+    }
+
+    #[test]
+    fn alert_flag_propagates_to_spans() {
+        let d = RegexDetector::from_entities(vec![
+            RegexEntity { id: "iban".into(), pattern: Regex::new(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}[A-Z0-9]{1,3}\b").unwrap(), action: Action::Mask, checksum: Some(Checksum::Mod97), alert: true },
+            RegexEntity { id: "email".into(), pattern: Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap(), action: Action::Mask, checksum: None, alert: false },
+        ]);
+        let spans = d.detect("IBAN DE89370400440532013000 email a@x.com");
+        assert!(spans.iter().any(|s| s.entity == "iban" && s.alert), "iban must alert: {spans:?}");
+        assert!(spans.iter().any(|s| s.entity == "email" && !s.alert), "email must not alert: {spans:?}");
     }
 }
