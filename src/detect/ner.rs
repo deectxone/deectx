@@ -21,7 +21,11 @@ pub struct NerDetector {
 impl NerDetector {
     pub fn new(model_dir: PathBuf, labels: Vec<(String, Action, bool)>) -> Self {
         if labels.is_empty() {
-            return Self { session: None, tokenizer: None, labels };
+            return Self {
+                session: None,
+                tokenizer: None,
+                labels,
+            };
         }
         let model_path = model_dir.join("model.onnx");
         let tokenizer_path = model_dir.join("tokenizer.json");
@@ -30,24 +34,38 @@ impl NerDetector {
         // missing-DLL panic) for a model dir that cannot work anyway.
         if !model_path.exists() || !tokenizer_path.exists() {
             tracing::warn!("NER model files missing; NER disabled (fail-open)");
-            return Self { session: None, tokenizer: None, labels };
+            return Self {
+                session: None,
+                tokenizer: None,
+                labels,
+            };
         }
         // ort lazy-inits onnxruntime on the first commit; a missing DLL panics
         // via an internal `.expect`, so the whole load is catch_unwind-guarded.
-        let loaded = std::panic::catch_unwind(|| -> anyhow::Result<(ort::session::Session, tokenizers::Tokenizer)> {
-            let session = ort::session::Session::builder()?.commit_from_file(&model_path)?;
-            let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
-                .map_err(|e| anyhow::anyhow!("tokenizer load failed: {e}"))?;
-            Ok((session, tokenizer))
-        });
+        let loaded = std::panic::catch_unwind(
+            || -> anyhow::Result<(ort::session::Session, tokenizers::Tokenizer)> {
+                let session = ort::session::Session::builder()?.commit_from_file(&model_path)?;
+                let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path)
+                    .map_err(|e| anyhow::anyhow!("tokenizer load failed: {e}"))?;
+                Ok((session, tokenizer))
+            },
+        );
         match loaded {
             Ok(Ok((session, tokenizer))) => {
                 tracing::info!("NER model loaded ({} labels)", labels.len());
-                Self { session: Some(std::sync::Mutex::new(session)), tokenizer: Some(tokenizer), labels }
+                Self {
+                    session: Some(std::sync::Mutex::new(session)),
+                    tokenizer: Some(tokenizer),
+                    labels,
+                }
             }
             Ok(Err(e)) => {
                 tracing::warn!("NER model failed to load; NER disabled (fail-open): {e}");
-                Self { session: None, tokenizer: None, labels }
+                Self {
+                    session: None,
+                    tokenizer: None,
+                    labels,
+                }
             }
             Err(payload) => {
                 let msg = payload
@@ -56,7 +74,11 @@ impl NerDetector {
                     .or_else(|| payload.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "unknown panic payload".to_string());
                 tracing::warn!("NER model load panicked (onnxruntime DLL missing?); NER disabled (fail-open): {msg}");
-                Self { session: None, tokenizer: None, labels }
+                Self {
+                    session: None,
+                    tokenizer: None,
+                    labels,
+                }
             }
         }
     }
@@ -64,7 +86,8 @@ impl NerDetector {
 
 impl Detector for NerDetector {
     fn detect(&self, text: &str) -> Vec<Span> {
-        let (Some(session), Some(tokenizer)) = (self.session.as_ref(), self.tokenizer.as_ref()) else {
+        let (Some(session), Some(tokenizer)) = (self.session.as_ref(), self.tokenizer.as_ref())
+        else {
             return Vec::new();
         };
         if self.labels.is_empty() {
@@ -183,7 +206,9 @@ fn build_prompt(
     for label in labels {
         push_word(&[ENT_TOKEN_ID], &mut ids, &mut word_starts);
         prompt_words += 1;
-        let enc = tokenizer.encode(*label, false).map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))?;
+        let enc = tokenizer
+            .encode(*label, false)
+            .map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))?;
         let toks: Vec<i64> = enc.get_ids().iter().map(|&i| i as i64).collect();
         push_word(&toks, &mut ids, &mut word_starts);
         prompt_words += 1;
@@ -192,7 +217,9 @@ fn build_prompt(
     prompt_words += 1;
 
     for word in text_words {
-        let enc = tokenizer.encode(*word, false).map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))?;
+        let enc = tokenizer
+            .encode(*word, false)
+            .map_err(|e| anyhow::anyhow!("tokenizer encode failed: {e}"))?;
         let toks: Vec<i64> = enc.get_ids().iter().map(|&i| i as i64).collect();
         push_word(&toks, &mut ids, &mut word_starts);
     }
@@ -352,7 +379,10 @@ mod tests {
             settings: Default::default(),
         };
         let chain = build_chain(&[pack], true, PathBuf::from("./definitely-missing-models"));
-        assert!(!chain.ready(), "chain must report not-ready when the NER model is missing");
+        assert!(
+            !chain.ready(),
+            "chain must report not-ready when the NER model is missing"
+        );
         assert!(chain.detect("John Smith lives in Sydney").is_empty());
     }
 }

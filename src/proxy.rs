@@ -48,7 +48,13 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
     let state = Arc::new(AppState {
         upstream: cfg.upstream.trim_end_matches('/').to_string(),
         anthropic_upstream,
-        chain: packs::build_chain(&packs, cfg.ner, cfg.model_dir.clone().unwrap_or_else(|| std::path::PathBuf::from("./models"))),
+        chain: packs::build_chain(
+            &packs,
+            cfg.ner,
+            cfg.model_dir
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("./models")),
+        ),
         masker: std::sync::Arc::new(Masker::new()),
         ledger: Ledger::new(cfg.ledger_path, cfg.ledger_retention_days)?,
         http: reqwest::Client::new(),
@@ -58,7 +64,10 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
     });
     let app = Router::new()
         .route("/healthz", axum::routing::get(|| async { "ok" }))
-        .route("/v1/chat/completions", axum::routing::post(handle_chat_openai))
+        .route(
+            "/v1/chat/completions",
+            axum::routing::post(handle_chat_openai),
+        )
         .route("/v1/messages", axum::routing::post(handle_chat_anthropic))
         .with_state(state);
     axum::serve(listener, app).await?;
@@ -112,17 +121,34 @@ async fn handle_completion(
         tracing::warn!("failClosed enforcement: a required detector (NER model) is unavailable; refusing request");
         return Response::builder()
             .status(503)
-            .body(Body::from("deeCtx: failClosed enforcement — masking cannot be guaranteed"))
+            .body(Body::from(
+                "deeCtx: failClosed enforcement — masking cannot be guaranteed",
+            ))
             .unwrap();
     }
     let mut events = Vec::new();
     mask_walk(&st, &session, &mut events, &mut json);
-    let stream = json.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let stream = json
+        .get("stream")
+        .and_then(|s| s.as_bool())
+        .unwrap_or(false);
     let out = serde_json::to_vec(&json).unwrap_or_else(|_| body.to_vec());
-    let resp = forward_raw(&st, format, headers, Bytes::from(out), Some(&session), stream).await;
+    let resp = forward_raw(
+        &st,
+        format,
+        headers,
+        Bytes::from(out),
+        Some(&session),
+        stream,
+    )
+    .await;
     // Streaming latency is measured in Task 3; non-stream requests buffer the
     // full body in forward_raw, so elapsed() here is the true request latency.
-    let latency_ms = if stream { 0 } else { start.elapsed().as_millis() };
+    let latency_ms = if stream {
+        0
+    } else {
+        start.elapsed().as_millis()
+    };
     let entry = LedgerEntry {
         ts: Utc::now(),
         tool,
@@ -154,6 +180,7 @@ fn mask_walk(
                 // `1.5` drift, no whitespace collapsing). Otherwise fall back to
                 // masking the raw string bytes so every unaffected node keeps its
                 // exact original text and a masked sibling can't corrupt numbers.
+                #[allow(clippy::cmp_owned)]
                 let byte_preserving = inner.to_string() == *s;
                 if byte_preserving && mask_walk(st, session, events, &mut inner) {
                     *s = inner.to_string();
@@ -199,7 +226,10 @@ fn mask_content(
     let masked = st.masker.mask_text(session, content, &spans);
     for s in &spans {
         if s.alert {
-            tracing::warn!("deeCtx ALERT: '{}' entity detected (masked/redacted; see ledger)", s.entity);
+            tracing::warn!(
+                "deeCtx ALERT: '{}' entity detected (masked/redacted; see ledger)",
+                s.entity
+            );
         }
         let ph = match s.action {
             Action::Mask => st.masker.placeholder_for(session, &s.text),
@@ -209,7 +239,11 @@ fn mask_content(
             entity: s.entity.clone(),
             placeholder: ph.clone(),
             ph_hash: ph.as_ref().map(|p| sha256_hex(p)),
-            action: if matches!(s.action, Action::Mask) { "mask".into() } else { "redact".into() },
+            action: if matches!(s.action, Action::Mask) {
+                "mask".into()
+            } else {
+                "redact".into()
+            },
             alert: s.alert,
         });
     }
@@ -272,7 +306,8 @@ async fn forward_raw(
                         .scan((), move |_, chunk| {
                             futures_util::future::ready(match chunk {
                                 Ok(bytes) => Some(Ok(Bytes::from(
-                                    reh.lock().unwrap_or_else(|p| p.into_inner())
+                                    reh.lock()
+                                        .unwrap_or_else(|p| p.into_inner())
                                         .push(&bytes, &sess, &masker),
                                 ))),
                                 Err(e) => Some(Err(e)),
@@ -280,7 +315,8 @@ async fn forward_raw(
                         })
                         .chain(futures_util::stream::once(futures_util::future::ready(Ok(
                             Bytes::from(
-                                reh2.lock().unwrap_or_else(|p| p.into_inner())
+                                reh2.lock()
+                                    .unwrap_or_else(|p| p.into_inner())
                                     .finish(&sess2, &masker2),
                             ),
                         ))));
@@ -302,14 +338,20 @@ async fn forward_raw(
                     }
                     Err(e) => {
                         tracing::warn!("upstream read error: {e}");
-                        builder.status(502).body(Body::from("upstream read error")).unwrap()
+                        builder
+                            .status(502)
+                            .body(Body::from("upstream read error"))
+                            .unwrap()
                     }
                 }
             }
         }
         Err(e) => {
             tracing::warn!("upstream error: {e}");
-            Response::builder().status(502).body(Body::from("upstream error")).unwrap()
+            Response::builder()
+                .status(502)
+                .body(Body::from("upstream error"))
+                .unwrap()
         }
     }
 }
@@ -322,7 +364,7 @@ fn is_gzip_like_headers(headers: &HeaderMap) -> bool {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_ascii_lowercase();
-    ce != "" && ce != "identity"
+    !ce.is_empty() && ce != "identity"
 }
 
 /// Rehydration only makes sense for UTF-8 text bodies. Gzip/compressed or
@@ -347,14 +389,19 @@ fn rehydrate_response(st: &AppState, session: &str, bytes: &[u8], format: ApiFor
                         if let Some(msg) = c["message"].as_object_mut() {
                             if let Some(txt) = msg.get_mut("content") {
                                 if let Some(s) = txt.as_str() {
-                                    *txt = serde_json::Value::String(st.masker.rehydrate(session, s));
+                                    *txt =
+                                        serde_json::Value::String(st.masker.rehydrate(session, s));
                                 }
                             }
-                            if let Some(calls) = msg.get_mut("tool_calls").and_then(|t| t.as_array_mut()) {
+                            if let Some(calls) =
+                                msg.get_mut("tool_calls").and_then(|t| t.as_array_mut())
+                            {
                                 for tc in calls {
                                     if let Some(args) = tc["function"].get_mut("arguments") {
                                         if let Some(s) = args.as_str() {
-                                            *args = serde_json::Value::String(st.masker.rehydrate(session, s));
+                                            *args = serde_json::Value::String(
+                                                st.masker.rehydrate(session, s),
+                                            );
                                         }
                                     }
                                 }
@@ -363,14 +410,19 @@ fn rehydrate_response(st: &AppState, session: &str, bytes: &[u8], format: ApiFor
                         if let Some(delta) = c["delta"].as_object_mut() {
                             if let Some(txt) = delta.get_mut("content") {
                                 if let Some(s) = txt.as_str() {
-                                    *txt = serde_json::Value::String(st.masker.rehydrate(session, s));
+                                    *txt =
+                                        serde_json::Value::String(st.masker.rehydrate(session, s));
                                 }
                             }
-                            if let Some(calls) = delta.get_mut("tool_calls").and_then(|t| t.as_array_mut()) {
+                            if let Some(calls) =
+                                delta.get_mut("tool_calls").and_then(|t| t.as_array_mut())
+                            {
                                 for tc in calls {
                                     if let Some(args) = tc["function"].get_mut("arguments") {
                                         if let Some(s) = args.as_str() {
-                                            *args = serde_json::Value::String(st.masker.rehydrate(session, s));
+                                            *args = serde_json::Value::String(
+                                                st.masker.rehydrate(session, s),
+                                            );
                                         }
                                     }
                                 }
@@ -408,12 +460,24 @@ mod tests {
     #[test]
     fn gzip_like_headers_guards_streaming_rehydration() {
         let mut h = HeaderMap::new();
-        assert!(!is_gzip_like_headers(&h), "absent content-encoding is not gzip");
-        h.insert("content-encoding", axum::http::HeaderValue::from_static("identity"));
+        assert!(
+            !is_gzip_like_headers(&h),
+            "absent content-encoding is not gzip"
+        );
+        h.insert(
+            "content-encoding",
+            axum::http::HeaderValue::from_static("identity"),
+        );
         assert!(!is_gzip_like_headers(&h), "identity is not gzip");
-        h.insert("content-encoding", axum::http::HeaderValue::from_static("gzip"));
+        h.insert(
+            "content-encoding",
+            axum::http::HeaderValue::from_static("gzip"),
+        );
         assert!(is_gzip_like_headers(&h), "gzip is gzip");
-        h.insert("content-encoding", axum::http::HeaderValue::from_static("br"));
+        h.insert(
+            "content-encoding",
+            axum::http::HeaderValue::from_static("br"),
+        );
         assert!(is_gzip_like_headers(&h), "br is gzip-like");
     }
 

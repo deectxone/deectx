@@ -50,18 +50,33 @@ async fn masks_email_before_forwarding() {
     assert_eq!(resp.status(), 200);
 
     let resp_body = resp.text().await.unwrap();
-    assert!(resp_body.contains("jane.doe@example.com"),
-            "placeholder was not rehydrated in response: {}", resp_body);
+    assert!(
+        resp_body.contains("jane.doe@example.com"),
+        "placeholder was not rehydrated in response: {}",
+        resp_body
+    );
     let resp_json: serde_json::Value = serde_json::from_str(&resp_body).unwrap();
-    let args = resp_json["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"].as_str().unwrap();
-    assert!(args.contains("jane.doe@example.com"),
-            "tool_calls arguments were not rehydrated: {}", args);
-    assert!(!resp_body.contains("[EMAIL_1]"),
-            "masked placeholder leaked to client: {}", resp_body);
+    let args = resp_json["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+        .as_str()
+        .unwrap();
+    assert!(
+        args.contains("jane.doe@example.com"),
+        "tool_calls arguments were not rehydrated: {}",
+        args
+    );
+    assert!(
+        !resp_body.contains("[EMAIL_1]"),
+        "masked placeholder leaked to client: {}",
+        resp_body
+    );
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let upstream_body = received.lock().unwrap().clone();
-    assert!(!upstream_body.contains("jane.doe@example.com"), "PII leaked upstream: {}", upstream_body);
+    assert!(
+        !upstream_body.contains("jane.doe@example.com"),
+        "PII leaked upstream: {}",
+        upstream_body
+    );
     assert!(upstream_body.contains("[EMAIL_1]"));
     assert!(upstream_body.contains("[CARD_1]") || upstream_body.contains("[CREDIT_CARD_1]"));
 
@@ -122,19 +137,29 @@ async fn masks_and_rehydrates_anthropic_messages() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let text = resp.text().await.unwrap();
-    assert!(text.contains("jane.doe@example.com"), "response must be rehydrated: {text}");
+    assert!(
+        text.contains("jane.doe@example.com"),
+        "response must be rehydrated: {text}"
+    );
     assert!(!text.contains("[EMAIL_1]"), "placeholder leaked: {text}");
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let upstream = seen.lock().unwrap().clone();
-    assert!(upstream.contains("[EMAIL_1]"), "upstream must see masked email: {upstream}");
-    assert!(!upstream.contains("jane.doe@example.com"), "upstream must not see raw email: {upstream}");
+    assert!(
+        upstream.contains("[EMAIL_1]"),
+        "upstream must see masked email: {upstream}"
+    );
+    assert!(
+        !upstream.contains("jane.doe@example.com"),
+        "upstream must not see raw email: {upstream}"
+    );
 }
 
 #[tokio::test]
 async fn masks_tool_arguments_on_request() {
     let (upstream, received) = mock_upstream();
-    let ledger_path = std::env::temp_dir().join(format!("deectx_tools_{}.jsonl", std::process::id()));
+    let ledger_path =
+        std::env::temp_dir().join(format!("deectx_tools_{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&ledger_path);
 
     let cfg = deectx::config::Config {
@@ -162,16 +187,23 @@ async fn masks_tool_arguments_on_request() {
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let upstream_body = received.lock().unwrap().clone();
-    assert!(upstream_body.contains("[EMAIL_1]"),
-        "tool argument must be masked upstream: {}", upstream_body);
-    assert!(!upstream_body.contains("jane.doe@example.com"),
-        "raw email must not leak upstream: {}", upstream_body);
+    assert!(
+        upstream_body.contains("[EMAIL_1]"),
+        "tool argument must be masked upstream: {}",
+        upstream_body
+    );
+    assert!(
+        !upstream_body.contains("jane.doe@example.com"),
+        "raw email must not leak upstream: {}",
+        upstream_body
+    );
 }
 
 #[tokio::test]
 async fn masking_a_tool_arg_preserves_sibling_numeric_fields() {
     let (upstream, received) = mock_upstream();
-    let ledger_path = std::env::temp_dir().join(format!("deectx_fc_sib_{}.jsonl", std::process::id()));
+    let ledger_path =
+        std::env::temp_dir().join(format!("deectx_fc_sib_{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&ledger_path);
 
     let cfg = deectx::config::Config {
@@ -195,31 +227,53 @@ async fn masking_a_tool_arg_preserves_sibling_numeric_fields() {
     });
     let resp = client
         .post(format!("http://127.0.0.1:{}/v1/chat/completions", port))
-        .json(&body).send().await.unwrap();
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let upstream = received.lock().unwrap().clone();
-    assert!(upstream.contains("[EMAIL_1]"), "email must be masked upstream: {upstream}");
-    assert!(!upstream.contains("jane.doe@example.com"), "raw email leaked upstream: {upstream}");
+    assert!(
+        upstream.contains("[EMAIL_1]"),
+        "email must be masked upstream: {upstream}"
+    );
+    assert!(
+        !upstream.contains("jane.doe@example.com"),
+        "raw email leaked upstream: {upstream}"
+    );
     // Parse the forwarded body down to the tool-call arguments (the arguments
     // arrive as an escaped JSON string) and verify masking the email did not
     // re-encode the unmasked sibling numbers.
     let body: serde_json::Value = serde_json::from_str(&upstream).unwrap();
-    let args_raw = body["messages"][1]["tool_calls"][0]["function"]["arguments"].as_str().unwrap();
-    assert!(args_raw.contains("\"amount\":1.50"),
-        "float trailing zero dropped despite sibling masked: {args_raw}");
-    assert!(args_raw.contains("9007199254740993"),
-        "large integer precision lost despite sibling masked: {args_raw}");
+    let args_raw = body["messages"][1]["tool_calls"][0]["function"]["arguments"]
+        .as_str()
+        .unwrap();
+    assert!(
+        args_raw.contains("\"amount\":1.50"),
+        "float trailing zero dropped despite sibling masked: {args_raw}"
+    );
+    assert!(
+        args_raw.contains("9007199254740993"),
+        "large integer precision lost despite sibling masked: {args_raw}"
+    );
     let args: serde_json::Value = serde_json::from_str(args_raw).unwrap();
-    assert_eq!(args["email"], "[EMAIL_1]", "email must resolve to placeholder");
-    assert_eq!(args["big"], 9007199254740993i64, "big int must round-trip exactly");
+    assert_eq!(
+        args["email"], "[EMAIL_1]",
+        "email must resolve to placeholder"
+    );
+    assert_eq!(
+        args["big"], 9007199254740993i64,
+        "big int must round-trip exactly"
+    );
 }
 
 #[tokio::test]
 async fn masks_anthropic_tool_use_input() {
     let (up_addr, seen) = mock_upstream_anthropic().await;
-    let ledger_path = std::env::temp_dir().join(format!("deectx_tools_an_{}.jsonl", std::process::id()));
+    let ledger_path =
+        std::env::temp_dir().join(format!("deectx_tools_an_{}.jsonl", std::process::id()));
     let _ = std::fs::remove_file(&ledger_path);
     let cfg = deectx::config::Config {
         listen: "127.0.0.1:0".into(),
@@ -252,8 +306,14 @@ async fn masks_anthropic_tool_use_input() {
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let upstream = seen.lock().unwrap().clone();
-    assert!(upstream.contains("[EMAIL_1]"), "tool_use.input must be masked: {upstream}");
-    assert!(!upstream.contains("jane.doe@example.com"), "tool_use.input leaked: {upstream}");
+    assert!(
+        upstream.contains("[EMAIL_1]"),
+        "tool_use.input must be masked: {upstream}"
+    );
+    assert!(
+        !upstream.contains("jane.doe@example.com"),
+        "tool_use.input leaked: {upstream}"
+    );
 }
 
 #[tokio::test]
@@ -265,11 +325,19 @@ async fn streams_sse_with_split_placeholder_rehydrated() {
         let (mut sock, _) = listener.accept().await.unwrap();
         let mut buf = vec![0u8; 65536];
         let _ = sock.read(&mut buf).await.unwrap();
-        sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n").await.unwrap();
+        sock.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
         sock.flush().await.unwrap();
-        sock.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"hello [EMA").await.unwrap();
+        sock.write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"hello [EMA")
+            .await
+            .unwrap();
         sock.flush().await.unwrap();
-        sock.write_all(b"IL_1]\"}}]}\n\ndata: [DONE]\n\n").await.unwrap();
+        sock.write_all(b"IL_1]\"}}]}\n\ndata: [DONE]\n\n")
+            .await
+            .unwrap();
         sock.flush().await.unwrap();
     });
 
@@ -296,11 +364,22 @@ async fn streams_sse_with_split_placeholder_rehydrated() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert!(resp.headers().get("content-type").map(|v| v.to_str().unwrap().contains("event-stream")).unwrap_or(false),
-        "must preserve event-stream content-type");
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .map(|v| v.to_str().unwrap().contains("event-stream"))
+            .unwrap_or(false),
+        "must preserve event-stream content-type"
+    );
     let text = resp.text().await.unwrap();
-    assert!(text.contains("jane.doe@example.com"), "split placeholder must be rehydrated: {text}");
-    assert!(!text.contains("[EMAIL_1]"), "placeholder leaked into stream: {text}");
+    assert!(
+        text.contains("jane.doe@example.com"),
+        "split placeholder must be rehydrated: {text}"
+    );
+    assert!(
+        !text.contains("[EMAIL_1]"),
+        "placeholder leaked into stream: {text}"
+    );
 }
 
 #[tokio::test]
@@ -318,7 +397,9 @@ async fn healthz_returns_ok() {
 
     let resp = reqwest::Client::new()
         .get(format!("http://127.0.0.1:{}/healthz", port))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(resp.text().await.unwrap(), "ok");
 }
@@ -328,7 +409,9 @@ async fn healthz_returns_ok() {
 async fn fail_closed_pack_blocks_when_ner_model_missing() {
     let pack_dir = std::env::temp_dir().join(format!("deectx_strict_{}", std::process::id()));
     std::fs::create_dir_all(&pack_dir).unwrap();
-    std::fs::write(pack_dir.join("strict.yaml"), r#"name: strict
+    std::fs::write(
+        pack_dir.join("strict.yaml"),
+        r#"name: strict
 version: 0.1.0
 entities:
   - id: person
@@ -337,7 +420,9 @@ entities:
     action: mask
 settings:
   failClosed: true
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let (upstream, _received) = mock_upstream();
     let ledger_path = std::env::temp_dir().join(format!("deectx_fc_{}.jsonl", std::process::id()));
@@ -360,7 +445,13 @@ settings:
     let resp = client
         .post(format!("http://127.0.0.1:{}/v1/chat/completions", port))
         .json(&json!({"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}))
-        .send().await.unwrap();
-    assert_eq!(resp.status(), 503, "failClosed must block when NER model is unavailable");
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        503,
+        "failClosed must block when NER model is unavailable"
+    );
     let _ = std::fs::remove_dir_all(&pack_dir);
 }

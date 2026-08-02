@@ -1,4 +1,3 @@
-use deectx::detect::Detector;
 use deectx::packs::{build_chain, Pack};
 use std::collections::HashMap;
 
@@ -33,7 +32,11 @@ fn load_fixtures() -> Vec<Fixture> {
 
 #[test]
 fn golden_set_precision_recall_gate() {
-    let chain = build_chain(&[Pack::builtin_default()], false, std::path::PathBuf::from("./models"));
+    let chain = build_chain(
+        &[Pack::builtin_default()],
+        false,
+        std::path::PathBuf::from("./models"),
+    );
     let mut tp = 0usize;
     let mut fp = 0usize;
     let mut fn_count = 0usize;
@@ -43,13 +46,21 @@ fn golden_set_precision_recall_gate() {
         let spans = chain.detect(&fx.text);
         let mut remaining: HashMap<(String, String), usize> = HashMap::new();
         for exp in &fx.expected {
-            *remaining.entry((exp.entity.clone(), exp.text.trim().to_string())).or_insert(0) += 1;
+            *remaining
+                .entry((exp.entity.clone(), exp.text.trim().to_string()))
+                .or_insert(0) += 1;
         }
         let mut local_fp = 0usize;
         for s in &spans {
             let key = (s.entity.clone(), s.text.trim().to_string());
             if let Some(n) = remaining.get_mut(&key) {
-                if *n > 0 { *n -= 1; tp += 1; } else { fp += 1; local_fp += 1; }
+                if *n > 0 {
+                    *n -= 1;
+                    tp += 1;
+                } else {
+                    fp += 1;
+                    local_fp += 1;
+                }
             } else {
                 fp += 1;
                 local_fp += 1;
@@ -62,7 +73,10 @@ fn golden_set_precision_recall_gate() {
                 "{}: missed={:?} false_positives={:?}",
                 fx.name,
                 remaining,
-                spans.iter().map(|s| (s.entity.as_str(), s.text.trim())).collect::<Vec<_>>()
+                spans
+                    .iter()
+                    .map(|s| (s.entity.as_str(), s.text.trim()))
+                    .collect::<Vec<_>>()
             ));
         }
     }
@@ -72,8 +86,14 @@ fn golden_set_precision_recall_gate() {
     for f in &failures {
         eprintln!("GOLDEN: {f}");
     }
-    assert!(recall >= RECALL_GATE,
-        "recall {recall:.2} < {RECALL_GATE}:\n{}", failures.join("\n"));
-    assert!(precision >= PRECISION_GATE,
-        "precision {precision:.2} < {PRECISION_GATE}:\n{}", failures.join("\n"));
+    assert!(
+        recall >= RECALL_GATE,
+        "recall {recall:.2} < {RECALL_GATE}:\n{}",
+        failures.join("\n")
+    );
+    assert!(
+        precision >= PRECISION_GATE,
+        "precision {precision:.2} < {PRECISION_GATE}:\n{}",
+        failures.join("\n")
+    );
 }

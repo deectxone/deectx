@@ -70,13 +70,21 @@ impl Ledger {
             }
             self.prune_old()?;
         }
-        let f = OpenOptions::new().create(true).append(true).open(&self.base)?;
+        let f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.base)?;
         *self.file.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
         Ok(())
     }
 
     fn prune_old(&self) -> io::Result<()> {
-        let stem = self.base.file_stem().and_then(|s| s.to_str()).unwrap_or("ledger").to_string();
+        let stem = self
+            .base
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("ledger")
+            .to_string();
         let dir = self.base.parent().unwrap_or(Path::new("."));
         let today = Utc::now().date_naive();
         for entry in std::fs::read_dir(dir)? {
@@ -98,7 +106,11 @@ impl Ledger {
     }
 
     pub fn read_all(path: &Path) -> io::Result<Vec<LedgerEntry>> {
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("ledger").to_string();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("ledger")
+            .to_string();
         let dir = path.parent().unwrap_or(Path::new("."));
         let mut files: Vec<PathBuf> = Vec::new();
         for entry in std::fs::read_dir(dir)? {
@@ -133,7 +145,10 @@ impl Ledger {
 }
 
 fn rotated_path(base: &Path, date: NaiveDate) -> PathBuf {
-    let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("ledger");
+    let stem = base
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("ledger");
     let dir = base.parent().unwrap_or(Path::new("."));
     dir.join(format!("{stem}-{}.jsonl", date.format("%Y-%m-%d")))
 }
@@ -169,7 +184,8 @@ mod tests {
         };
         ledger.append(&entry).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
-        let line: serde_json::Value = serde_json::from_str(content.lines().next().unwrap()).unwrap();
+        let line: serde_json::Value =
+            serde_json::from_str(content.lines().next().unwrap()).unwrap();
         assert_eq!(line["session"], "s_abc12345");
         assert_eq!(line["events"][0]["entity"], "email");
         assert!(content.contains("ph_hash"));
@@ -207,11 +223,18 @@ mod tests {
             .unwrap();
 
         let rotated = dir.join(format!("ledger-{}.jsonl", yesterday.format("%Y-%m-%d")));
-        assert!(rotated.exists(), "yesterday entries must be rotated to a dated file");
+        assert!(
+            rotated.exists(),
+            "yesterday entries must be rotated to a dated file"
+        );
         assert!(base.exists(), "today's file must remain at the base path");
 
         let all = Ledger::read_all(&base).unwrap();
-        assert_eq!(all.len(), 2, "read_all must span base + rotated files: {all:?}");
+        assert_eq!(
+            all.len(),
+            2,
+            "read_all must span base + rotated files: {all:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -223,7 +246,10 @@ mod tests {
         std::fs::write(&base, "").unwrap();
         let old = dir.join("ledger-2020-01-01.jsonl");
         std::fs::write(&old, "").unwrap();
-        let recent = dir.join(format!("ledger-{}.jsonl", Utc::now().date_naive().format("%Y-%m-%d")));
+        let recent = dir.join(format!(
+            "ledger-{}.jsonl",
+            Utc::now().date_naive().format("%Y-%m-%d")
+        ));
         std::fs::write(&recent, "").unwrap();
 
         let _ = Ledger::new(base.clone(), 90).unwrap();
@@ -240,6 +266,9 @@ mod tests {
         assert!(e.events[0].alert);
         let old = r#"{"ts":"2026-08-01T00:00:00Z","tool":"t","session":"s","events":[{"entity":"iban","placeholder":"[IBAN_1]","ph_hash":"h","action":"mask"}],"latency_ms":1,"packs":[]}"#;
         let e2: LedgerEntry = serde_json::from_str(old).unwrap();
-        assert!(!e2.events[0].alert, "old entries without alert must default to false");
+        assert!(
+            !e2.events[0].alert,
+            "old entries without alert must default to false"
+        );
     }
 }
