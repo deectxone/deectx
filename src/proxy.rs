@@ -49,7 +49,7 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
         anthropic_upstream,
         chain: packs::build_chain(&packs, cfg.ner, cfg.model_dir.clone().unwrap_or_else(|| std::path::PathBuf::from("./models"))),
         masker: std::sync::Arc::new(Masker::new()),
-        ledger: Ledger::new(cfg.ledger_path)?,
+        ledger: Ledger::new(cfg.ledger_path, cfg.ledger_retention_days)?,
         http: reqwest::Client::new(),
         packs: pack_names,
         allowlist,

@@ -95,7 +95,7 @@ mod tests {
     fn summarize_for_date_filters_to_that_date() {
         let path = std::env::temp_dir().join(format!("deectx_audit_{}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let ledger = Ledger::new(path.clone()).unwrap();
+        let ledger = Ledger::new(path.clone(), 90).unwrap();
         ledger.append(&sample_entry(0, "today", &["default"], vec![])).unwrap();
         ledger.append(&sample_entry(-1, "yesterday", &["default"], vec![])).unwrap();
         let today = Utc::now().date_naive();
