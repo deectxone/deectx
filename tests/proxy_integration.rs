@@ -255,6 +255,26 @@ async fn streams_sse_with_split_placeholder_rehydrated() {
     assert!(!text.contains("[EMAIL_1]"), "placeholder leaked into stream: {text}");
 }
 
+#[tokio::test]
+async fn healthz_returns_ok() {
+    let ledger_path = std::env::temp_dir().join(format!("deectx_hz_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        ledger_path,
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    let resp = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{}/healthz", port))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.text().await.unwrap(), "ok");
+}
+
 #[cfg(feature = "ner")]
 #[tokio::test]
 async fn fail_closed_pack_blocks_when_ner_model_missing() {

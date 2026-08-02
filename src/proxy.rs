@@ -57,6 +57,7 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
         fail_closed: packs.iter().any(|p| p.settings.fail_closed),
     });
     let app = Router::new()
+        .route("/healthz", axum::routing::get(|| async { "ok" }))
         .route("/v1/chat/completions", axum::routing::post(handle_chat_openai))
         .route("/v1/messages", axum::routing::post(handle_chat_anthropic))
         .with_state(state);
