@@ -9,6 +9,8 @@ pub struct Config {
     pub upstream: String,
     #[serde(default = "default_ledger")]
     pub ledger_path: PathBuf,
+    #[serde(default = "default_retention_days")]
+    pub ledger_retention_days: u64,
     #[serde(default)]
     pub active_packs: Vec<String>,
     #[serde(default)]
@@ -26,10 +28,11 @@ pub struct Config {
 fn default_listen() -> String { "127.0.0.1:8787".into() }
 fn default_upstream() -> String { "https://api.openai.com".into() }
 fn default_ledger() -> PathBuf { PathBuf::from("./ledger.jsonl") }
+fn default_retention_days() -> u64 { 90 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { listen: default_listen(), upstream: default_upstream(), ledger_path: default_ledger(), active_packs: Vec::new(), packs_dir: None, model_dir: None, allowlist: Vec::new(), ner: false, upstream_anthropic: None }
+        Self { listen: default_listen(), upstream: default_upstream(), ledger_path: default_ledger(), ledger_retention_days: default_retention_days(), active_packs: Vec::new(), packs_dir: None, model_dir: None, allowlist: Vec::new(), ner: false, upstream_anthropic: None }
     }
 }
 
