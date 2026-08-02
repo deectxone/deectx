@@ -1,12 +1,11 @@
 use chrono::{DateTime, Utc};
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LedgerEvent {
     pub entity: String,
     pub placeholder: Option<String>,
@@ -14,7 +13,7 @@ pub struct LedgerEvent {
     pub action: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LedgerEntry {
     pub ts: DateTime<Utc>,
     pub tool: String,
@@ -38,6 +37,21 @@ impl Ledger {
         let mut line = serde_json::to_string(entry).map_err(io::Error::other)?;
         line.push('\n');
         self.file.lock().unwrap_or_else(|p| p.into_inner()).write_all(line.as_bytes())
+    }
+
+    pub fn read_all(path: &std::path::Path) -> io::Result<Vec<LedgerEntry>> {
+        let text = std::fs::read_to_string(path)?;
+        let mut out = Vec::new();
+        for (i, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<LedgerEntry>(line) {
+                Ok(e) => out.push(e),
+                Err(e) => tracing::warn!("ledger line {} unparseable: {e}", i + 1),
+            }
+        }
+        Ok(out)
     }
 }
 
