@@ -1,0 +1,128 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: deectx-x86_64-unknown-linux-gnu.tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: deectx-x86_64-apple-darwin.tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: deectx-aarch64-apple-darwin.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: deectx-x86_64-pc-windows-msvc.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/deectx${{ runner.os == 'Windows' && '.exe' || '' }}"
+          ART="${{ matrix.artifact }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -Command "Compress-Archive -Path '$BIN' -DestinationPath '$ART'"
+          else
+            tar -C "$(dirname "$BIN")" -czf "$ART" "$(basename "$BIN")"
+          fi
+          echo "artifact=$ART" >> "$GITHUB_ENV"
+          echo "sha256=$(shasum -a 256 "$ART" | awk '{print $1}')" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+      - name: Print SHA-256
+        run: echo "${{ matrix.artifact }} -> ${{ env.sha256 }}"
+
+  release:
+    name: Attach to GitHub Release + refresh manifests
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./dist
+          merge-multiple: true
+
+      - name: Upload binaries to release ${{ github.ref_name }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ github.ref_name }}" ./dist/* --clobber
+
+      - name: Refresh Homebrew and Scoop manifests
+        run: |
+          set -euo pipefail
+          # Homebrew formula installs from the crates.io source crate (same on
+          # all platforms); fetch its sha256 from the crates.io API.
+          VERSION="${GITHUB_REF_NAME#v}"
+          CRATE_SHA=$(curl -fsSL "https://crates.io/api/v1/crates/deectx/$VERSION/download" \
+            -o /tmp/deectx.crate && shasum -a 256 /tmp/deectx.crate | awk '{print $1}')
+          sed -i "s/sha256 \".*\"/sha256 \"$CRATE_SHA\"/" install/brew/deectx.rb
+
+          # Scoop uses the Windows zip; recompute its hash from the artifact.
+          WIN_SHA=$(shasum -a 256 dist/deectx-x86_64-pc-windows-msvc.zip | awk '{print $1}')
+          export WIN_SHA
+          python - <<'EOF'
+          import json, os, pathlib
+          p = pathlib.Path("install/scoop/deectx.json")
+          m = json.loads(p.read_text())
+          m["architecture"]["64bit"]["hash"] = os.environ["WIN_SHA"]
+          p.write_text(json.dumps(m, indent=2) + "\n")
+          EOF
+
+      - name: Commit refresh (only on default branch)
+        run: |
+          set -euo pipefail
+          # A tag can point at a commit on any branch. Only commit the manifest
+          # refresh back when the tagged commit is reachable from the default
+          # branch (i.e. master), so develop/topic tags never trigger pushes.
+          DEFAULT="${{ github.event.repository.default_branch }}"
+          git fetch origin "$DEFAULT"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "refs/remotes/origin/$DEFAULT"; then
+            echo "Tag is not on $DEFAULT; skipping manifest commit."
+            exit 0
+          fi
+          git config user.name "deectx-release-bot"
+          git config user.email "deectx-bot@users.noreply.github.com"
+          git add install/brew/deectx.rb install/scoop/deectx.json
+          if git diff --cached --quiet; then
+            echo "No manifest changes."
+          else
+            git commit -m "release: refresh brew + scoop manifests for ${{ github.ref_name }}"
+            git push origin "HEAD:$DEFAULT"
+          fi
