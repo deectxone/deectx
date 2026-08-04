@@ -47,7 +47,7 @@ pub enum PatchResult {
 /// original to `path + ".bak"` first. Idempotent.
 pub fn patch_config(tool: Tool, path: &PathBuf) -> Result<PatchResult> {
     let original = std::fs::read_to_string(path)?;
-    if original.contains("127.0.0.1:8787") {
+    if wired(tool, &original) {
         return Ok(PatchResult::AlreadyPatched);
     }
 
@@ -81,15 +81,33 @@ fn patch_for(tool: Tool, original: &str) -> Result<String> {
                 "",
             ]
             .join("\n");
+            let table_exists = codex_table_exists(original);
+            let missing_keys = codex_missing_key_lines(original, base);
             let mut patched = String::new();
             let mut found = false;
             let mut seen_section = false;
             for line in original.lines() {
                 let trimmed = line.trim_start();
+                if trimmed == "[model_providers.deectx]" {
+                    patched.push_str(line);
+                    patched.push('\n');
+                    // Reuse the existing table: only append keys it is missing,
+                    // never emitting a second `[model_providers.deectx]` header.
+                    for key_line in &missing_keys {
+                        patched.push_str(key_line);
+                        patched.push('\n');
+                    }
+                    seen_section = true;
+                    continue;
+                }
                 if trimmed.starts_with('[') {
                     seen_section = true;
                 }
-                if !seen_section && trimmed.starts_with("model_provider") {
+                if !seen_section
+                    && (trimmed == "model_provider"
+                        || trimmed.starts_with("model_provider ")
+                        || trimmed.starts_with("model_provider="))
+                {
                     if found {
                         continue;
                     }
@@ -103,7 +121,12 @@ fn patch_for(tool: Tool, original: &str) -> Result<String> {
             if !found {
                 patched = format!("{header}{patched}");
             }
-            Ok(format!("{}\n{block}", patched.trim_end()))
+            let mut out = patched.trim_end().to_string();
+            if !table_exists {
+                out.push('\n');
+                out.push_str(block);
+            }
+            Ok(out)
         }
         Tool::Opencode => {
             let mut v: serde_json::Value = serde_json::from_str(original)?;
@@ -121,6 +144,44 @@ pub fn is_locked(tool: Tool, path: &PathBuf) -> bool {
         Ok(content) => content.contains("oauth_account"),
         Err(_) => false,
     }
+}
+
+/// True when the original config already declares a `[model_providers.deectx]`
+/// table, so patching must reuse it rather than emitting a duplicate header.
+fn codex_table_exists(original: &str) -> bool {
+    original
+        .lines()
+        .any(|l| l.trim_start() == "[model_providers.deectx]")
+}
+
+/// Key-value lines that the existing `[model_providers.deectx]` table is
+/// missing and therefore needs appended (keys already present are left alone).
+fn codex_missing_key_lines(original: &str, base: &str) -> Vec<String> {
+    let mut in_table = false;
+    let mut present: Vec<&str> = Vec::new();
+    for line in original.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            in_table = trimmed == "[model_providers.deectx]";
+            continue;
+        }
+        if in_table {
+            if let Some(key) = trimmed.split('=').next() {
+                present.push(key.trim());
+            }
+        }
+    }
+    let needed = [
+        ("name", "name = \"deeCtx proxy\""),
+        ("base_url", &format!("base_url = \"{base}\"")),
+        ("wire_api", "wire_api = \"chat\""),
+        ("env_key", "env_key = \"OPENAI_API_KEY\""),
+    ];
+    needed
+        .iter()
+        .filter(|(key, _)| !present.contains(key))
+        .map(|(_, line)| line.to_string())
+        .collect()
 }
 
 /// True when the tool's config routes through the local proxy. Codex needs both
@@ -483,6 +544,72 @@ mod tests {
             patched.matches("model_provider = \"deectx\"").count() == 1,
             "exactly one top-level model_provider selection"
         );
+    }
+
+    #[test]
+    fn codex_patch_preserves_model_provider_alias() {
+        let original = "model_provider_alias = \"custom\"\nmodel_provider = \"openai\"\n";
+        let patched = patch_for(Tool::Codex, original).unwrap();
+
+        assert!(
+            patched.contains("model_provider_alias = \"custom\""),
+            "unrelated top-level key must be preserved: {patched}"
+        );
+        assert_eq!(patched.matches("model_provider = \"deectx\"").count(), 1);
+        assert!(!patched.contains("model_provider = \"openai\""));
+    }
+
+    #[test]
+    fn codex_patch_reuses_existing_deectx_table() {
+        let original = "model = \"gpt-4o\"\n[model_providers.deectx]\nname = \"Custom\"\nbase_url = \"http://127.0.0.1:8787\"\nwire_api = \"chat\"\nenv_key = \"OPENAI_API_KEY\"\n";
+        let patched = patch_for(Tool::Codex, original).unwrap();
+
+        assert_eq!(
+            patched.matches("[model_providers.deectx]").count(),
+            1,
+            "existing deectx table must be reused, not duplicated: {patched}"
+        );
+        assert!(
+            patched.contains("name = \"Custom\""),
+            "existing table keys must be preserved: {patched}"
+        );
+        assert_eq!(patched.matches("model_provider = \"deectx\"").count(), 1);
+        toml::from_str::<toml::Value>(&patched)
+            .unwrap_or_else(|e| panic!("patched must stay valid TOML: {e}\n{patched}"));
+    }
+
+    #[test]
+    fn codex_stale_partial_block_self_heals() {
+        let stale = "[model_providers.deectx]\nbase_url = \"http://127.0.0.1:8787\"\nwire_api = \"chat\"\nenv_key = \"OPENAI_API_KEY\"\n";
+        let dir = temp_dir("stale_codex");
+        let path = dir.join("config.toml");
+        std::fs::write(&path, stale).unwrap();
+
+        assert!(
+            !wired(Tool::Codex, stale),
+            "block without the selection is NOT wired"
+        );
+        assert_eq!(
+            patch_config(Tool::Codex, &path).unwrap(),
+            PatchResult::Patched,
+            "stale partial state must be patched (self-heal)"
+        );
+        let patched = std::fs::read_to_string(&path).unwrap();
+        assert!(wired(Tool::Codex, &patched), "patched must be fully wired");
+        assert_eq!(
+            patched.matches("[model_providers.deectx]").count(),
+            1,
+            "no duplicate table after self-heal: {patched}"
+        );
+        toml::from_str::<toml::Value>(&patched)
+            .unwrap_or_else(|e| panic!("self-healed config must parse as TOML: {e}\n{patched}"));
+
+        assert_eq!(
+            patch_config(Tool::Codex, &path).unwrap(),
+            PatchResult::AlreadyPatched,
+            "self-healed config is idempotent"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -128,11 +128,15 @@ async fn main() -> Result<()> {
                     println!("{tool:?}: locked OAuth provider, cannot intercept");
                     continue;
                 }
-                match deectx::setup::patch_config(*tool, path)? {
-                    deectx::setup::PatchResult::AlreadyPatched => {
+                match deectx::setup::patch_config(*tool, path) {
+                    Err(e) => {
+                        eprintln!("failed to patch {tool:?}: {e}");
+                        continue;
+                    }
+                    Ok(deectx::setup::PatchResult::AlreadyPatched) => {
                         println!("{tool:?}: already wired")
                     }
-                    deectx::setup::PatchResult::Patched => {
+                    Ok(deectx::setup::PatchResult::Patched) => {
                         println!("{tool:?}: patched -> {}", path.display())
                     }
                 }

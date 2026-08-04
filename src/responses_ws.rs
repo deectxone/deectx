@@ -15,6 +15,11 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 /// sessions (the Masker's placeholder map is keyed by session string).
 static CONN_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Flush the per-session event buffer to the ledger after this many events so
+/// long-lived WebSocket sessions never accumulate unboundedly. The final flush
+/// at connection close still runs even if the threshold is never crossed.
+const LEDGER_FLUSH_THRESHOLD: usize = 100;
+
 /// True when the fail-closed gate must refuse the request: a pack opts into
 /// fail-closed enforcement and a required detector (e.g. the NER model) is not
 /// ready, so masking cannot be guaranteed and traffic must not flow unmasked.
@@ -91,6 +96,9 @@ async fn handle_socket(mut socket: WebSocket, st: Arc<AppState>, headers: Header
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         let out = mask_outbound(&text, &st, &session, &mut events);
+                        if events.len() >= LEDGER_FLUSH_THRESHOLD {
+                            flush_ledger(&st, &session, &mut events);
+                        }
                         let _ = upstream
                             .send(tokio_tungstenite::tungstenite::Message::Text(out.into()))
                             .await;
@@ -112,11 +120,20 @@ async fn handle_socket(mut socket: WebSocket, st: Arc<AppState>, headers: Header
         }
     }
 
+    flush_ledger(&st, &session, &mut events);
+}
+
+/// Append any buffered events to the ledger as one entry and clear the buffer.
+/// A no-op when nothing is buffered; warns (never panics) on ledger failure.
+fn flush_ledger(st: &AppState, session: &str, events: &mut Vec<LedgerEvent>) {
+    if events.is_empty() {
+        return;
+    }
     let entry = LedgerEntry {
         ts: Utc::now(),
         tool: "responses-ws".into(),
-        session,
-        events,
+        session: session.to_string(),
+        events: std::mem::take(events),
         latency_ms: 0,
         packs: st.packs.clone(),
     };
@@ -227,6 +244,10 @@ mod tests {
                 .join(format!("deectx_ws_unit_{}.jsonl", std::process::id())),
             ..Default::default()
         };
+        state_from_config(cfg, ner, fail_closed)
+    }
+
+    fn state_from_config(cfg: Config, ner: bool, fail_closed: bool) -> Arc<AppState> {
         let packs = packs::load_active(&cfg);
         let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
         let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(&cfg, &packs));
@@ -371,5 +392,53 @@ mod tests {
             "no-change frames must keep exact original bytes"
         );
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn ws_flushes_ledger_periodically() {
+        let ledger_path =
+            std::env::temp_dir().join(format!("deectx_ws_flush_{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&ledger_path);
+        let st = state_from_config(
+            Config {
+                ledger_path: ledger_path.clone(),
+                ..Default::default()
+            },
+            false,
+            false,
+        );
+        let session = "ws_flush_unit".to_string();
+        let mut events: Vec<LedgerEvent> = Vec::new();
+
+        // Mirror the socket loop: after each frame that may add events, flush
+        // once the buffer crosses the threshold, then a final flush at "close".
+        for _ in 0..150 {
+            mask_outbound(
+                r#"{"type":"response.create","input":"mail jane.doe@example.com"}"#,
+                &st,
+                &session,
+                &mut events,
+            );
+            if events.len() >= LEDGER_FLUSH_THRESHOLD {
+                flush_ledger(&st, &session, &mut events);
+            }
+        }
+        flush_ledger(&st, &session, &mut events);
+
+        assert!(events.is_empty(), "buffer must be emptied after flush");
+        let all = crate::ledger::Ledger::read_all(&ledger_path).unwrap();
+        assert!(
+            all.len() >= 2,
+            "periodic flush must write multiple ledger entries, got {}",
+            all.len()
+        );
+        for entry in &all {
+            assert_eq!(entry.tool, "responses-ws");
+            assert!(
+                !entry.events.is_empty(),
+                "flushed entries must carry events"
+            );
+        }
+        let _ = std::fs::remove_file(&ledger_path);
     }
 }

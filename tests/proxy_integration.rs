@@ -437,6 +437,50 @@ async fn stats_endpoint_returns_json() {
 }
 
 #[tokio::test]
+async fn stats_counters_reflect_real_requests() {
+    let (upstream, _received) = mock_upstream();
+    let ledger_path =
+        std::env::temp_dir().join(format!("deectx_stats_cnt_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream,
+        ledger_path,
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    // A real completion request carrying an email: drives requests + masked.
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", port))
+        .json(&json!({"model":"gpt-4","messages":[{"role":"user","content":"contact jane.doe@example.com please"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let stats = client
+        .get(format!("http://127.0.0.1:{}/stats", port))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stats.status(), 200);
+    let body: serde_json::Value = stats.json().await.unwrap();
+    assert!(
+        body["requests"].as_u64().unwrap_or(0) >= 1,
+        "requests must be counted: {body}"
+    );
+    assert!(
+        body["masked"].as_u64().unwrap_or(0) >= 1,
+        "masked events must be counted: {body}"
+    );
+}
+
+#[tokio::test]
 async fn stats_endpoint_disabled_returns_404() {
     let cfg = deectx::config::Config {
         listen: "127.0.0.1:0".into(),
