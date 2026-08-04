@@ -258,9 +258,14 @@ async fn forward_raw(
     session: Option<&str>,
     stream: bool,
 ) -> Response {
-    let base = match format {
-        ApiFormat::OpenAI => &st.upstream,
-        ApiFormat::Anthropic => &st.anthropic_upstream,
+    let provider = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(crate::upstream::classify)
+        .unwrap_or(crate::upstream::Provider::Unknown);
+    let base = match provider {
+        crate::upstream::Provider::Anthropic => &st.anthropic_upstream,
+        _ => &st.upstream,
     };
     let path = match format {
         ApiFormat::OpenAI => "/v1/chat/completions",
