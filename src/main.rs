@@ -40,6 +40,10 @@ enum Cmd {
     Doctor,
     /// Restore original configs from .bak backups
     Unwrap,
+    /// Install the autostart daemon so the proxy runs at login
+    DaemonInstall,
+    /// Remove the autostart daemon
+    DaemonUninstall,
 }
 
 #[tokio::main]
@@ -133,6 +137,12 @@ async fn main() -> Result<()> {
                     }
                 }
             }
+            if let Err(e) = deectx::setup::install_daemon() {
+                println!("daemon install skipped: {e}");
+            } else {
+                println!("autostart daemon installed; proxy will start at login");
+            }
+            println!("proxy listen URL: http://{}", Config::default().listen);
             println!("done; start the proxy: deectx serve");
         }
         Cmd::Doctor => {
@@ -141,6 +151,14 @@ async fn main() -> Result<()> {
         Cmd::Unwrap => {
             deectx::setup::unwrap()?;
             println!("restored all original configs");
+        }
+        Cmd::DaemonInstall => {
+            deectx::setup::install_daemon()?;
+            println!("autostart daemon installed");
+        }
+        Cmd::DaemonUninstall => {
+            deectx::setup::uninstall_daemon()?;
+            println!("autostart daemon removed");
         }
     }
     Ok(())

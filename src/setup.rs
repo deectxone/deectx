@@ -173,6 +173,172 @@ pub fn unwrap() -> Result<()> {
     Ok(())
 }
 
+/// User home directory (Windows `USERPROFILE`, unix `HOME`) — same derivation
+/// as `Tool::config_path`.
+fn home_dir() -> Option<PathBuf> {
+    std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .map(PathBuf::from)
+}
+
+/// Windows startup-folder batch file content: runs `<exe> serve` at login.
+fn windows_batch(exe: &str) -> String {
+    format!("@echo off\r\nstart \"\" \"{exe}\" serve\r\n")
+}
+
+/// macOS LaunchAgent plist content: runs `<exe> serve` at login, kept alive.
+fn plist_xml(exe: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.deectx.proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe}</string>
+        <string>serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+"#
+    )
+}
+
+/// Linux systemd user unit content: runs `<exe> serve`, restarted on failure.
+fn systemd_unit(exe: &str) -> String {
+    format!(
+        "[Unit]\nDescription=deeCtx PII-masking proxy\n\n[Service]\nExecStart={exe} serve\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
+    )
+}
+
+/// Per-OS autostart artifact path. `None` when the OS is unsupported or the
+/// home directory cannot be resolved.
+fn daemon_path_for(os: &str) -> Option<PathBuf> {
+    match os {
+        "windows" => {
+            let base = std::env::var("APPDATA")
+                .ok()
+                .map(PathBuf::from)
+                .or_else(|| home_dir().map(|h| h.join("AppData").join("Roaming")))?;
+            Some(
+                base.join("Microsoft")
+                    .join("Windows")
+                    .join("Start Menu")
+                    .join("Programs")
+                    .join("Startup")
+                    .join("deectx.cmd"),
+            )
+        }
+        "macos" => Some(
+            home_dir()?
+                .join("Library")
+                .join("LaunchAgents")
+                .join("com.deectx.proxy.plist"),
+        ),
+        "linux" => Some(
+            home_dir()?
+                .join(".config")
+                .join("systemd")
+                .join("user")
+                .join("deectx.service"),
+        ),
+        _ => None,
+    }
+}
+
+/// Per-OS autostart artifact (path + content) for `exe`. Pure with respect to
+/// the file system; `None` for unsupported OSes.
+fn daemon_artifact_for(os: &str, exe: &str) -> Option<(PathBuf, String)> {
+    let content = match os {
+        "windows" => windows_batch(exe),
+        "macos" => plist_xml(exe),
+        "linux" => systemd_unit(exe),
+        _ => return None,
+    };
+    Some((daemon_path_for(os)?, content))
+}
+
+/// Write the artifact, creating parent dirs. Separated from spawning so tests
+/// never shell out.
+fn install_at(path: &std::path::Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, content)?;
+    Ok(())
+}
+
+/// Remove the artifact if present. Idempotent.
+fn uninstall_at(path: &std::path::Path) -> Result<()> {
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+/// Install the per-OS autostart artifact pointing at the current binary
+/// running `serve`. On Linux/macOS also runs the systemd/launchctl enable
+/// commands (failures ignored — the artifact is the source of truth).
+/// Idempotent: safe to re-run.
+pub fn install_daemon() -> Result<()> {
+    let os = std::env::consts::OS;
+    let exe = std::env::current_exe()?;
+    let exe = exe.to_string_lossy();
+    let (path, content) = daemon_artifact_for(os, &exe)
+        .ok_or_else(|| anyhow::anyhow!("unsupported OS for autostart daemon"))?;
+    install_at(&path, &content)?;
+    match os {
+        "macos" => {
+            let _ = std::process::Command::new("launchctl")
+                .args(["load", "-w"])
+                .arg(&path)
+                .status();
+        }
+        "linux" => {
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .status();
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "enable", "--now", "deectx.service"])
+                .status();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Remove the autostart artifact. On Linux/macOS also runs the
+/// systemd/launchctl disable commands (failures ignored). Idempotent: no-op
+/// if the artifact is absent.
+pub fn uninstall_daemon() -> Result<()> {
+    let os = std::env::consts::OS;
+    let path = daemon_path_for(os)
+        .ok_or_else(|| anyhow::anyhow!("unsupported OS for autostart daemon"))?;
+    match os {
+        "macos" => {
+            let _ = std::process::Command::new("launchctl")
+                .args(["unload", "-w"])
+                .arg(&path)
+                .status();
+        }
+        "linux" => {
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "disable", "--now", "deectx.service"])
+                .status();
+        }
+        _ => {}
+    }
+    uninstall_at(&path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,6 +499,59 @@ mod tests {
             wired(Tool::ClaudeCode, only_block),
             "non-Codex tools only need the block substring"
         );
+    }
+
+    #[test]
+    fn plist_xml_contains_exe_and_serve() {
+        let xml = plist_xml("/usr/local/bin/deectx");
+        assert!(xml.contains("<string>/usr/local/bin/deectx</string>"));
+        assert!(xml.contains("<string>serve</string>"));
+        assert!(xml.contains("RunAtLoad"));
+        assert!(xml.contains("com.deectx.proxy"));
+    }
+
+    #[test]
+    fn systemd_unit_contains_execstart() {
+        let unit = systemd_unit("/home/u/bin/deectx");
+        assert!(unit.contains("ExecStart=/home/u/bin/deectx serve"));
+        assert!(unit.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn windows_batch_contains_exe_and_serve() {
+        let batch = windows_batch("C:\\bin\\deectx.exe");
+        assert!(batch.contains("serve"));
+        assert!(batch.contains("C:\\bin\\deectx.exe"));
+    }
+
+    #[test]
+    fn unsupported_os_errors() {
+        assert!(daemon_artifact_for("unsupported", "/bin/deectx").is_none());
+        assert!(daemon_artifact_for("freebsd", "/bin/deectx").is_none());
+        // supported OSes resolve to an artifact on this host
+        assert!(daemon_artifact_for(std::env::consts::OS, "/bin/deectx").is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn install_then_uninstall_windows_roundtrip() {
+        let dir = temp_dir("daemon_roundtrip");
+        let path = dir.join("deectx.cmd");
+        let content = windows_batch("C:\\bin\\deectx.exe");
+
+        install_at(&path, &content).unwrap();
+        assert!(path.exists(), "install must write the startup artifact");
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("serve"));
+        assert!(written.contains("C:\\bin\\deectx.exe"));
+
+        uninstall_at(&path).unwrap();
+        assert!(!path.exists(), "uninstall must remove the artifact");
+
+        // idempotent: second uninstall is a no-op, no error
+        uninstall_at(&path).unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
