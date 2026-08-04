@@ -14,21 +14,22 @@ use futures_util::StreamExt;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
-struct AppState {
-    upstream: String,
-    anthropic_upstream: String,
-    chain: DetectorChain,
-    masker: std::sync::Arc<Masker>,
-    ledger: Ledger,
-    http: reqwest::Client,
-    packs: Vec<String>,
-    allowlist: crate::allowlist::Allowlist,
-    fail_closed: bool,
-    stats: std::sync::Arc<LiveStats>,
+pub(crate) struct AppState {
+    pub(crate) upstream: String,
+    pub(crate) anthropic_upstream: String,
+    pub(crate) upstream_responses: String,
+    pub(crate) chain: DetectorChain,
+    pub(crate) masker: std::sync::Arc<Masker>,
+    pub(crate) ledger: Ledger,
+    pub(crate) http: reqwest::Client,
+    pub(crate) packs: Vec<String>,
+    pub(crate) allowlist: crate::allowlist::Allowlist,
+    pub(crate) fail_closed: bool,
+    pub(crate) stats: std::sync::Arc<LiveStats>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ApiFormat {
+pub(crate) enum ApiFormat {
     OpenAI,
     Anthropic,
 }
@@ -51,6 +52,7 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
     let state = Arc::new(AppState {
         upstream: cfg.upstream.trim_end_matches('/').to_string(),
         anthropic_upstream,
+        upstream_responses: cfg.upstream_responses.clone(),
         chain: packs::build_chain(
             &packs,
             cfg.ner,
@@ -72,7 +74,11 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
             "/v1/chat/completions",
             axum::routing::post(handle_chat_openai),
         )
-        .route("/v1/messages", axum::routing::post(handle_chat_anthropic));
+        .route("/v1/messages", axum::routing::post(handle_chat_anthropic))
+        .route(
+            "/v1/responses",
+            axum::routing::get(crate::responses_ws::ws_handler),
+        );
     if stats_enabled {
         app = app.route("/stats", axum::routing::get(handle_stats));
     }
@@ -175,7 +181,7 @@ async fn handle_stats(State(st): State<Arc<AppState>>) -> axum::Json<crate::stat
     axum::Json(st.stats.snapshot())
 }
 
-fn mask_walk(
+pub(crate) fn mask_walk(
     st: &AppState,
     session: &str,
     events: &mut Vec<LedgerEvent>,
@@ -225,7 +231,7 @@ fn mask_walk(
     }
 }
 
-fn mask_content(
+pub(crate) fn mask_content(
     st: &AppState,
     session: &str,
     content: &str,
@@ -406,7 +412,12 @@ fn is_gzip_like(bytes: &[u8], headers: &HeaderMap) -> bool {
 /// pass over the re-serialized JSON. If the body is not valid JSON, falls back to
 /// a raw placeholder->original replace so plain-text or partially-broken streams
 /// are still best-effort rehydrated.
-fn rehydrate_response(st: &AppState, session: &str, bytes: &[u8], format: ApiFormat) -> Vec<u8> {
+pub(crate) fn rehydrate_response(
+    st: &AppState,
+    session: &str,
+    bytes: &[u8],
+    format: ApiFormat,
+) -> Vec<u8> {
     let text = String::from_utf8_lossy(bytes);
     if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&text) {
         match format {

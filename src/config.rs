@@ -25,6 +25,8 @@ pub struct Config {
     pub upstream_anthropic: Option<String>,
     #[serde(default = "default_stats_enabled")]
     pub stats_enabled: bool,
+    #[serde(default = "default_upstream_responses")]
+    pub upstream_responses: String,
 }
 
 fn default_listen() -> String {
@@ -42,6 +44,9 @@ fn default_retention_days() -> u64 {
 fn default_stats_enabled() -> bool {
     true
 }
+fn default_upstream_responses() -> String {
+    "https://api.openai.com/v1/responses".to_string()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -57,6 +62,7 @@ impl Default for Config {
             ner: false,
             upstream_anthropic: None,
             stats_enabled: default_stats_enabled(),
+            upstream_responses: default_upstream_responses(),
         }
     }
 }

@@ -508,3 +508,90 @@ settings:
     );
     let _ = std::fs::remove_dir_all(&pack_dir);
 }
+
+/// Loopback WebSocket upstream: accepts a masked frame, echoes a Responses
+/// event containing a masked placeholder, then closes. Returns (ws_url, masked_texts_seen).
+async fn mock_responses_ws() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as Ws;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen2 = seen.clone();
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Ws::Text(text) = msg {
+                seen2.lock().unwrap().push(text.to_string());
+                let reply = r#"{"type":"response.output_text.delta","delta":"sent report to [EMAIL_1]","item_id":"msg_1","output_index":0,"content_index":0}"#;
+                ws.send(Ws::Text(reply.into())).await.unwrap();
+                ws.send(Ws::Close(None)).await.unwrap();
+                break;
+            }
+        }
+    });
+    (format!("ws://{addr}/v1/responses"), seen)
+}
+
+#[tokio::test]
+async fn responses_ws_masks_outbound_and_rehydrates_inbound() {
+    let (upstream, seen) = mock_responses_ws().await;
+    let ledger_path = std::env::temp_dir().join(format!("deectx_ws_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream_responses: upstream.clone(),
+        ledger_path: ledger_path.clone(),
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as Ws;
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{local}/v1/responses"))
+        .await
+        .unwrap();
+    ws.send(Ws::Text(
+        r#"{"type":"response.create","input":"my email is jane.doe@example.com"}"#.into(),
+    ))
+    .await
+    .unwrap();
+    let reply = ws.next().await.unwrap().unwrap();
+    let text = match reply {
+        Ws::Text(t) => t.to_string(),
+        other => panic!("expected a text frame, got {other:?}"),
+    };
+    assert!(
+        text.contains("jane.doe@example.com"),
+        "inbound delta must be rehydrated to the client: {text}"
+    );
+    assert!(
+        !text.contains("[EMAIL_1]"),
+        "masked placeholder leaked to client: {text}"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let sent = seen.lock().unwrap().clone();
+    assert!(
+        sent.iter().any(|s| s.contains("[EMAIL_1]")),
+        "upstream must see the masked email: {sent:?}"
+    );
+    assert!(
+        sent.iter().all(|s| !s.contains("jane.doe@example.com")),
+        "raw email must not leave outbound: {sent:?}"
+    );
+
+    let ledger = std::fs::read_to_string(&ledger_path).unwrap();
+    assert!(
+        ledger.contains("\"tool\":\"responses-ws\""),
+        "WS connection must log a responses-ws ledger entry: {ledger}"
+    );
+    assert!(ledger.contains("\"entity\":\"email\""));
+    assert!(
+        !ledger.contains("jane.doe@example.com"),
+        "ledger must never store raw PII"
+    );
+}
