@@ -8,6 +8,7 @@ pub mod masker;
 pub mod packs;
 pub mod proxy;
 pub mod responses_ws;
+pub mod setup;
 pub mod span;
 pub mod sse;
 pub mod stats;

@@ -34,6 +34,12 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Auto-wire installed AI tools to the local proxy
+    Setup,
+    /// Verify which tools are wired to the proxy
+    Doctor,
+    /// Restore original configs from .bak backups
+    Unwrap,
 }
 
 #[tokio::main]
@@ -107,6 +113,34 @@ async fn main() -> Result<()> {
             } else {
                 println!("{}", deectx::status::format_status(&body)?);
             }
+        }
+        Cmd::Setup => {
+            let found = deectx::setup::discover();
+            if found.is_empty() {
+                println!("deectx setup: no installed tools found to wire");
+            }
+            for (tool, path) in &found {
+                if deectx::setup::is_locked(*tool, path) {
+                    println!("{tool:?}: locked OAuth provider, cannot intercept");
+                    continue;
+                }
+                match deectx::setup::patch_config(*tool, path)? {
+                    deectx::setup::PatchResult::AlreadyPatched => {
+                        println!("{tool:?}: already wired")
+                    }
+                    deectx::setup::PatchResult::Patched => {
+                        println!("{tool:?}: patched -> {}", path.display())
+                    }
+                }
+            }
+            println!("done; start the proxy: deectx serve");
+        }
+        Cmd::Doctor => {
+            println!("{}", deectx::setup::doctor()?);
+        }
+        Cmd::Unwrap => {
+            deectx::setup::unwrap()?;
+            println!("restored all original configs");
         }
     }
     Ok(())
