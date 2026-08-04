@@ -263,9 +263,11 @@ async fn forward_raw(
         .and_then(|v| v.to_str().ok())
         .map(crate::upstream::classify)
         .unwrap_or(crate::upstream::Provider::Unknown);
-    let base = match provider {
-        crate::upstream::Provider::Anthropic => &st.anthropic_upstream,
-        _ => &st.upstream,
+    let base = match (provider, format) {
+        (crate::upstream::Provider::Anthropic, _) => &st.anthropic_upstream,
+        (crate::upstream::Provider::OpenAI, _) => &st.upstream,
+        (crate::upstream::Provider::Unknown, ApiFormat::Anthropic) => &st.anthropic_upstream,
+        (crate::upstream::Provider::Unknown, _) => &st.upstream,
     };
     let path = match format {
         ApiFormat::OpenAI => "/v1/chat/completions",
