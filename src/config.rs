@@ -23,6 +23,8 @@ pub struct Config {
     pub ner: bool,
     #[serde(default)]
     pub upstream_anthropic: Option<String>,
+    #[serde(default = "default_stats_enabled")]
+    pub stats_enabled: bool,
 }
 
 fn default_listen() -> String {
@@ -36,6 +38,9 @@ fn default_ledger() -> PathBuf {
 }
 fn default_retention_days() -> u64 {
     90
+}
+fn default_stats_enabled() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -51,6 +56,7 @@ impl Default for Config {
             allowlist: Vec::new(),
             ner: false,
             upstream_anthropic: None,
+            stats_enabled: default_stats_enabled(),
         }
     }
 }

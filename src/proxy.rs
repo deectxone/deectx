@@ -5,6 +5,7 @@ use crate::masker::Masker;
 use crate::packs;
 use crate::span::Action;
 use crate::sse::SseRehydrator;
+use crate::stats::LiveStats;
 use anyhow::Result;
 use axum::body::Body;
 use axum::{body::Bytes, extract::State, http::HeaderMap, response::Response, Router};
@@ -23,6 +24,7 @@ struct AppState {
     packs: Vec<String>,
     allowlist: crate::allowlist::Allowlist,
     fail_closed: bool,
+    stats: std::sync::Arc<LiveStats>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +43,7 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
     let packs = packs::load_active(&cfg);
     let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
     let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(&cfg, &packs));
+    let stats_enabled = cfg.stats_enabled;
     let anthropic_upstream = cfg
         .upstream_anthropic
         .clone()
@@ -61,15 +64,19 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
         packs: pack_names,
         allowlist,
         fail_closed: packs.iter().any(|p| p.settings.fail_closed),
+        stats: std::sync::Arc::new(LiveStats::new()),
     });
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .route(
             "/v1/chat/completions",
             axum::routing::post(handle_chat_openai),
         )
-        .route("/v1/messages", axum::routing::post(handle_chat_anthropic))
-        .with_state(state);
+        .route("/v1/messages", axum::routing::post(handle_chat_anthropic));
+    if stats_enabled {
+        app = app.route("/stats", axum::routing::get(handle_stats));
+    }
+    let app = app.with_state(state);
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -107,6 +114,7 @@ async fn handle_completion(
     format: ApiFormat,
 ) -> Response {
     let start = std::time::Instant::now();
+    st.stats.record_request();
     let tool = headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
@@ -161,6 +169,10 @@ async fn handle_completion(
         tracing::warn!("ledger append failed: {e}");
     }
     resp
+}
+
+async fn handle_stats(State(st): State<Arc<AppState>>) -> axum::Json<crate::stats::StatsSnapshot> {
+    axum::Json(st.stats.snapshot())
 }
 
 fn mask_walk(
@@ -225,6 +237,14 @@ fn mask_content(
     }
     let masked = st.masker.mask_text(session, content, &spans);
     for s in &spans {
+        st.stats.record_event(
+            if matches!(s.action, Action::Mask) {
+                "mask"
+            } else {
+                "redact"
+            },
+            s.alert,
+        );
         if s.alert {
             tracing::warn!(
                 "deeCtx ALERT: '{}' entity detected (masked/redacted; see ledger)",

@@ -404,6 +404,59 @@ async fn healthz_returns_ok() {
     assert_eq!(resp.text().await.unwrap(), "ok");
 }
 
+/// Spawn a deectx proxy on an ephemeral port with default config; returns (addr, handle).
+/// /stats does not hit upstream, so no mock upstream is needed here.
+async fn spawn_proxy() -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        ledger_path: std::env::temp_dir()
+            .join(format!("deectx_stats_{}.jsonl", std::process::id())),
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+    (addr, handle)
+}
+
+#[tokio::test]
+async fn stats_endpoint_returns_json() {
+    let (addr, _guard) = spawn_proxy().await;
+    let resp = reqwest::Client::new()
+        .get(format!("http://{addr}/stats"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["requests"], 0);
+    assert!(body.get("masked").is_some());
+}
+
+#[tokio::test]
+async fn stats_endpoint_disabled_returns_404() {
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        ledger_path: std::env::temp_dir()
+            .join(format!("deectx_stats_off_{}.jsonl", std::process::id())),
+        stats_enabled: false,
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    let resp = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{}/stats", port))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
 #[cfg(feature = "ner")]
 #[tokio::test]
 async fn fail_closed_pack_blocks_when_ner_model_missing() {

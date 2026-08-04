@@ -9,4 +9,5 @@ pub mod packs;
 pub mod proxy;
 pub mod span;
 pub mod sse;
+pub mod stats;
 pub mod upstream;
