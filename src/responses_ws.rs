@@ -15,11 +15,27 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 /// sessions (the Masker's placeholder map is keyed by session string).
 static CONN_ID: AtomicU64 = AtomicU64::new(0);
 
+/// True when the fail-closed gate must refuse the request: a pack opts into
+/// fail-closed enforcement and a required detector (e.g. the NER model) is not
+/// ready, so masking cannot be guaranteed and traffic must not flow unmasked.
+fn fail_closed_refuses(st: &AppState) -> bool {
+    st.fail_closed && !st.chain.ready()
+}
+
 pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Response {
+    if fail_closed_refuses(&st) {
+        tracing::warn!("failClosed enforcement: a required detector (NER model) is unavailable; refusing WebSocket upgrade");
+        return Response::builder()
+            .status(503)
+            .body(axum::body::Body::from(
+                "deeCtx: failClosed enforcement — masking cannot be guaranteed",
+            ))
+            .unwrap();
+    }
     ws.on_upgrade(move |socket| handle_socket(socket, st, headers))
 }
 
@@ -202,6 +218,10 @@ mod tests {
     use crate::stats::LiveStats;
 
     fn test_state() -> Arc<AppState> {
+        test_state_with(false, false)
+    }
+
+    fn test_state_with(ner: bool, fail_closed: bool) -> Arc<AppState> {
         let cfg = Config {
             ledger_path: std::env::temp_dir()
                 .join(format!("deectx_ws_unit_{}.jsonl", std::process::id())),
@@ -217,15 +237,45 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| "https://api.anthropic.com".to_string()),
             upstream_responses: cfg.upstream_responses.clone(),
-            chain: packs::build_chain(&packs, false, std::path::PathBuf::from("./models")),
+            chain: packs::build_chain(
+                &packs,
+                ner,
+                std::path::PathBuf::from("./definitely-missing-models"),
+            ),
             masker: Arc::new(Masker::new()),
             ledger: Ledger::new(cfg.ledger_path, cfg.ledger_retention_days).unwrap(),
             http: reqwest::Client::new(),
             packs: pack_names,
             allowlist,
-            fail_closed: false,
+            fail_closed,
             stats: Arc::new(LiveStats::new()),
         })
+    }
+
+    #[test]
+    fn fail_closed_gate_refuses_non_ready_chain() {
+        let not_ready = test_state_with(true, true);
+        assert!(
+            !not_ready.chain.ready(),
+            "ner:true with a missing model dir must leave the chain not-ready"
+        );
+        assert!(
+            fail_closed_refuses(&not_ready),
+            "fail_closed with a non-ready chain must refuse (503)"
+        );
+
+        let ready = test_state_with(false, true);
+        assert!(ready.chain.ready(), "ner:false keeps the chain ready");
+        assert!(
+            !fail_closed_refuses(&ready),
+            "fail_closed must not fire when the chain is ready"
+        );
+
+        let fail_open = test_state_with(true, false);
+        assert!(
+            !fail_closed_refuses(&fail_open),
+            "non-fail-closed must not refuse even when not ready"
+        );
     }
 
     #[test]
