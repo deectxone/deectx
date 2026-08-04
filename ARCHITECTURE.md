@@ -78,9 +78,28 @@ memory, keyed by a per-session id.
 | `audit.rs` | Aggregation of ledger entries into `AuditSummary`. |
 | `allowlist.rs` | Exact, case-insensitive allow-list filter applied after detection. |
 | `chunk.rs` | Chunking helpers for large content. |
+| `upstream.rs` | `Provider` classification from API-key shape (`sk-ant-…` → Anthropic, `sk-…` → OpenAI). |
+| `stats.rs` | Live atomic counters (`requests`/`masked`/`redacted`/`alerts`) + `GET /stats` snapshot. |
+| `responses_ws.rs` | `/v1/responses` WebSocket: per-frame mask outbound / rehydrate inbound. |
+| `setup.rs` | Tool auto-wiring with `.bak` backups, `doctor`/`unwrap`, autostart daemon install. |
 
 > Note: the crate also ships `src/bin/ner_spike.rs` (a standalone NER model
 > spike) and a `models/` gitignored directory where a GLiNER ONNX model would live.
+
+### Routing, WebSocket, and autostart
+
+- **Key-shape routing.** `forward_raw` picks the upstream base from the
+  caller's `Authorization` key: `sk-ant-…` → `upstream_anthropic`, `sk-…` →
+  `upstream`; unknown shapes fall back to the request format
+  (Anthropic-format → `upstream_anthropic`, else `upstream`), so the `upstream`
+  default is always preserved.
+- **Responses WebSocket.** `GET /v1/responses` (Codex / Copilot CLI) upgrades
+  to a WebSocket; a dedicated upstream connection applies the same mask
+  outbound / rehydrate inbound per JSON frame, the fail-closed gate, and
+  ledger + stats recording (tool `responses-ws`).
+- **Autostart daemon.** `deectx setup` installs a per-OS login entry
+  (Windows Startup `.cmd`, macOS LaunchAgent, Linux systemd user unit) running
+  `deectx serve`; `daemon-install`/`daemon-uninstall` manage it directly.
 
 ---
 
@@ -211,3 +230,5 @@ What it does NOT do:
 | `model_dir` | `./models` | GLiNER ONNX model dir (`model.onnx` + `tokenizer.json`). |
 | `allowlist` | `[]` | Values never masked (case-insensitive). |
 | `ner` | `false` | Enable NER (requires `ner` feature + model). |
+| `stats_enabled` | `true` | Serve the live `GET /stats` endpoint. |
+| `upstream_responses` | `https://api.openai.com/v1/responses` | Responses API WebSocket upstream (Codex / Copilot CLI). |

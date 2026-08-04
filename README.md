@@ -89,6 +89,36 @@ Tool integration is turnkey for **Cursor** and **opencode** via the shipped
 shims — see [`shims/README.md`](shims/README.md). Any tool that lets you override
 its model base URL to the proxy works too (see “AI tool support” below).
 
+## Quick start: install-and-forget
+
+```bash
+deectx setup
+```
+
+One command discovers your installed tools and points them at the local proxy
+(`http://127.0.0.1:8787`):
+
+- **Wires Claude Code, Codex, and opencode** to the proxy, backing up every
+  patched file to `<path>.bak` first (existing backups are never overwritten;
+  re-running is idempotent). Tools locked to OAuth accounts (Claude Pro/Max,
+  Copilot built-in) are skipped with a message.
+- **Installs the autostart daemon** so the proxy starts at login
+  (`deectx daemon-install` / `deectx daemon-uninstall` manage it manually).
+
+Then verify and live with it:
+
+```bash
+deectx doctor          # per-tool wiring status
+deectx unwrap          # restore all original configs from .bak
+deectx status          # live masked/redacted counts from /stats
+deectx status --json   # raw JSON
+```
+
+The proxy routes by API-key shape — Anthropic keys (`sk-ant-…`) go to the
+Anthropic upstream, OpenAI keys (`sk-…`) to the OpenAI upstream — so one proxy
+serves both tools. Codex / Copilot CLI traffic rides the `/v1/responses`
+WebSocket, masked and rehydrated per frame.
+
 ## Verify it's working
 
 ```bash
@@ -148,6 +178,12 @@ two supported request schemas:
 deectx serve --config config.toml    # run the masking proxy
 deectx audit --config config.toml --today          # console summary
 deectx audit --config config.toml --today --export report.json   # JSON export
+deectx setup           # auto-wire installed tools + install autostart daemon
+deectx doctor          # check which tools are wired to the proxy
+deectx unwrap          # restore original tool configs from .bak backups
+deectx status [--json] # live counters from the running proxy's /stats
+deectx daemon-install  # start the proxy at login (autostart)
+deectx daemon-uninstall
 ```
 
 ---

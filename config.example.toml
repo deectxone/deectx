@@ -17,3 +17,9 @@ active_packs = ["gdpr"]
 
 # Allow-listed values are never masked (case-insensitive).
 # allowlist = ["jane.doe@example.com"]
+
+# Whether the live /stats endpoint is served (default true).
+# stats_enabled = true
+
+# Responses API WebSocket upstream (used by Codex / Copilot CLI).
+# upstream_responses = "https://api.openai.com/v1/responses"
