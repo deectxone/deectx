@@ -71,6 +71,7 @@ fn patch_for(tool: Tool, original: &str) -> Result<String> {
             Ok(serde_json::to_string_pretty(&v)?)
         }
         Tool::Codex => {
+            let header = "model_provider = \"deectx\"\n";
             let block = &[
                 "[model_providers.deectx]",
                 "name = \"deeCtx proxy\"",
@@ -80,7 +81,29 @@ fn patch_for(tool: Tool, original: &str) -> Result<String> {
                 "",
             ]
             .join("\n");
-            Ok(format!("{}\n{block}", original.trim_end()))
+            let mut patched = String::new();
+            let mut found = false;
+            let mut seen_section = false;
+            for line in original.lines() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with('[') {
+                    seen_section = true;
+                }
+                if !seen_section && trimmed.starts_with("model_provider") {
+                    if found {
+                        continue;
+                    }
+                    patched.push_str(header);
+                    found = true;
+                } else {
+                    patched.push_str(line);
+                    patched.push('\n');
+                }
+            }
+            if !found {
+                patched = format!("{header}{patched}");
+            }
+            Ok(format!("{}\n{block}", patched.trim_end()))
         }
         Tool::Opencode => {
             let mut v: serde_json::Value = serde_json::from_str(original)?;
@@ -100,6 +123,27 @@ pub fn is_locked(tool: Tool, path: &PathBuf) -> bool {
     }
 }
 
+/// True when the tool's config routes through the local proxy. Codex needs both
+/// the provider block AND a top-level `model_provider = "deectx"` selection;
+/// every other tool only needs the proxy base-URL substring.
+pub fn wired(tool: Tool, content: &str) -> bool {
+    let has_block = content.contains("127.0.0.1:8787");
+    if tool != Tool::Codex {
+        return has_block;
+    }
+    let mut seen_section = false;
+    let mut selected = false;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            seen_section = true;
+        } else if !seen_section && trimmed == "model_provider = \"deectx\"" {
+            selected = true;
+        }
+    }
+    has_block && selected
+}
+
 /// Verify which installed tools are wired to the proxy.
 pub fn doctor() -> Result<String> {
     let mut lines = Vec::new();
@@ -109,7 +153,7 @@ pub fn doctor() -> Result<String> {
     }
     for (tool, path) in found {
         let content = std::fs::read_to_string(&path)?;
-        let ok = content.contains("127.0.0.1:8787");
+        let ok = wired(tool, &content);
         lines.push(format!(
             "{tool:?}: {}",
             if ok { "OK (wired)" } else { "NOT WIRED" }
@@ -230,6 +274,65 @@ mod tests {
 
             std::fs::remove_dir_all(&dir).unwrap();
         }
+    }
+
+    #[test]
+    fn codex_patch_adds_model_provider_selection() {
+        let original = "model = \"gpt-4o\"\ntemperature = 0\n";
+        let patched = patch_for(Tool::Codex, original).unwrap();
+
+        let header_pos = patched
+            .find("model_provider = \"deectx\"")
+            .unwrap_or_else(|| panic!("patched must select the deectx provider"));
+        let first_section = patched.find('[').unwrap_or(usize::MAX);
+        assert!(
+            header_pos < first_section,
+            "top-level model_provider must precede any [section] header"
+        );
+        assert!(patched.contains("[model_providers.deectx]"));
+        assert!(patched.contains("base_url = \"http://127.0.0.1:8787\""));
+    }
+
+    #[test]
+    fn codex_patch_replaces_existing_model_provider() {
+        let original = "model_provider = \"openai\"\nmodel = \"gpt-4\"\n";
+        let patched = patch_for(Tool::Codex, original).unwrap();
+
+        assert_eq!(patched.matches("model_provider = \"deectx\"").count(), 1);
+        assert!(
+            !patched.contains("model_provider = \"openai\""),
+            "existing top-level model_provider value must be replaced"
+        );
+    }
+
+    #[test]
+    fn codex_patch_does_not_touch_section_level_keys() {
+        let original = "model = \"gpt-4o\"\n[model_providers.custom]\nname = \"Custom\"\nbase_url = \"http://other:9999\"\n";
+        let patched = patch_for(Tool::Codex, original).unwrap();
+
+        assert!(patched.contains("[model_providers.custom]"));
+        assert!(patched.contains("name = \"Custom\""));
+        assert!(patched.contains("base_url = \"http://other:9999\""));
+        assert!(
+            patched.matches("model_provider = \"deectx\"").count() == 1,
+            "exactly one top-level model_provider selection"
+        );
+    }
+
+    #[test]
+    fn wired_requires_codex_selection() {
+        let only_block = "[model_providers.deectx]\nbase_url = \"http://127.0.0.1:8787\"\n";
+        let both = "model_provider = \"deectx\"\n[model_providers.deectx]\nbase_url = \"http://127.0.0.1:8787\"\n";
+
+        assert!(
+            !wired(Tool::Codex, only_block),
+            "Codex needs the block AND the top-level selection"
+        );
+        assert!(wired(Tool::Codex, both));
+        assert!(
+            wired(Tool::ClaudeCode, only_block),
+            "non-Codex tools only need the block substring"
+        );
     }
 
     #[test]
