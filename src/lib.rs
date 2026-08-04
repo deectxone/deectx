@@ -10,4 +10,5 @@ pub mod proxy;
 pub mod span;
 pub mod sse;
 pub mod stats;
+pub mod status;
 pub mod upstream;

@@ -26,6 +26,14 @@ enum Cmd {
         #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "-")]
         export: Option<String>,
     },
+    /// Query the running proxy's live /stats endpoint
+    Status {
+        #[arg(long, default_value = "config.toml")]
+        config: PathBuf,
+        /// Print raw JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -74,6 +82,30 @@ async fn main() -> Result<()> {
                 }
                 Some(p) if p == "-" => println!("{json}"),
                 Some(p) => std::fs::write(&p, json)?,
+            }
+        }
+        Cmd::Status { config, json } => {
+            let cfg = Config::load(&config).unwrap_or_default();
+            let url = format!("http://{}/stats", cfg.listen);
+            let body = match reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(2))
+                .build()?
+                .get(&url)
+                .send()
+                .and_then(|r| r.error_for_status())
+                .and_then(|r| r.text())
+            {
+                Ok(b) => b,
+                Err(e) => {
+                    anyhow::bail!(
+                        "deectx status: could not reach proxy at {url} (is `deectx serve` running?) — {e}"
+                    );
+                }
+            };
+            if json {
+                println!("{body}");
+            } else {
+                println!("{}", deectx::status::format_status(&body)?);
             }
         }
     }
