@@ -46,6 +46,17 @@ enum Cmd {
     DaemonUninstall,
 }
 
+/// Load config if it exists, else fall back to defaults. Unlike Serve, this is
+/// shared by read-only subcommands (audit/status) so a malformed config fails
+/// loudly instead of being silently ignored.
+fn load_config(config: &std::path::Path) -> Result<Config> {
+    if config.exists() {
+        Ok(Config::load(config)?)
+    } else {
+        Ok(Config::default())
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -64,7 +75,7 @@ async fn main() -> Result<()> {
             today,
             export,
         } => {
-            let cfg = Config::load(&config).unwrap_or_default();
+            let cfg = load_config(&config)?;
             let summary = if today {
                 deectx::audit::summarize_for_date(
                     &cfg.ledger_path,
@@ -95,7 +106,7 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Status { config, json } => {
-            let cfg = Config::load(&config).unwrap_or_default();
+            let cfg = load_config(&config)?;
             let url = format!("http://{}/stats", cfg.listen);
             let body = match reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(2))
@@ -146,7 +157,11 @@ async fn main() -> Result<()> {
             } else {
                 println!("autostart daemon installed; proxy will start at login");
             }
-            println!("proxy listen URL: http://{}", Config::default().listen);
+            let listen = match load_config(&PathBuf::from("config.toml")) {
+                Ok(cfg) => cfg.listen,
+                Err(_) => Config::default().listen,
+            };
+            println!("proxy listen URL: http://{listen}");
             println!("done; start the proxy: deectx serve");
         }
         Cmd::Doctor => {

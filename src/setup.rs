@@ -8,14 +8,19 @@ pub enum Tool {
     Opencode,
 }
 
+/// User home directory (Windows `USERPROFILE`, unix `HOME`).
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .map(PathBuf::from)
+}
+
 impl Tool {
     /// Where the tool stores its user-level config. Derives the home dir from
     /// the environment each call (Windows `USERPROFILE`, unix `HOME`).
     pub fn config_path(&self) -> Option<PathBuf> {
-        let home = std::env::var("USERPROFILE")
-            .ok()
-            .or_else(|| std::env::var("HOME").ok())?;
-        let home = PathBuf::from(home);
+        let home = home_dir()?;
         Some(match self {
             Tool::ClaudeCode => home.join(".claude").join("settings.json"),
             Tool::Codex => home.join(".codex").join("config.toml"),
@@ -232,15 +237,6 @@ pub fn unwrap() -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// User home directory (Windows `USERPROFILE`, unix `HOME`) — same derivation
-/// as `Tool::config_path`.
-fn home_dir() -> Option<PathBuf> {
-    std::env::var("USERPROFILE")
-        .ok()
-        .or_else(|| std::env::var("HOME").ok())
-        .map(PathBuf::from)
 }
 
 /// Windows startup-folder batch file content: runs `<exe> serve` at login.

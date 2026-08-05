@@ -48,9 +48,16 @@ impl Ledger {
     pub fn append(&self, entry: &LedgerEntry) -> io::Result<()> {
         let entry_date = entry.ts.date_naive();
         let mut cur = self.current_date.lock().unwrap_or_else(|p| p.into_inner());
-        if *cur != entry_date {
+        // Forward rollover: base holds the previous date, so rotate it aside and
+        // start a fresh base for the new date.
+        if entry_date > *cur {
             self.rotate_to(entry_date, *cur)?;
             *cur = entry_date;
+        }
+        // Backdated / out-of-order entry (e.g. clock drift): do NOT disturb the
+        // live base file. Append to the entry's own dated file instead.
+        if entry_date < *cur {
+            return self.append_to(entry, entry_date);
         }
         let mut line = serde_json::to_string(entry).map_err(io::Error::other)?;
         line.push('\n');
@@ -59,6 +66,15 @@ impl Ledger {
             Some(f) => f.write_all(line.as_bytes()),
             None => Ok(()),
         }
+    }
+
+    /// Append a backdated entry to its own dated file without touching the base.
+    fn append_to(&self, entry: &LedgerEntry, date: NaiveDate) -> io::Result<()> {
+        let path = rotated_path(&self.base, date);
+        let mut line = serde_json::to_string(entry).map_err(io::Error::other)?;
+        line.push('\n');
+        let mut f = OpenOptions::new().create(true).append(true).open(&path)?;
+        f.write_all(line.as_bytes())
     }
 
     fn rotate_to(&self, new_date: NaiveDate, old_date: NaiveDate) -> io::Result<()> {
@@ -256,6 +272,54 @@ mod tests {
         assert!(!old.exists(), "old rotated file must be pruned");
         assert!(recent.exists(), "recent rotated file must be kept");
         assert!(base.exists(), "base file must be kept");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn backdated_entries_do_not_corrupt_current_base() {
+        let dir = std::env::temp_dir().join(format!("deectx_back_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("ledger.jsonl");
+
+        let ledger = Ledger::new(base.clone(), 90).unwrap();
+        let entry = |ts: chrono::DateTime<Utc>, tool: &str| LedgerEntry {
+            ts,
+            tool: tool.into(),
+            session: format!("s_{tool}"),
+            events: vec![],
+            latency_ms: 0,
+            packs: vec![],
+        };
+        let today = Utc::now();
+
+        // Forward rotation: today's entry lands in base.
+        ledger.append(&entry(today, "t")).unwrap();
+        // Backdated entry AFTER today's base exists must NOT rename the base
+        // (previously `rotate_to` re-suffixed today's file and corrupted it).
+        let yesterday = today - chrono::Duration::days(1);
+        ledger.append(&entry(yesterday, "y")).unwrap();
+
+        let today_file = dir.join(format!(
+            "ledger-{}.jsonl",
+            today.date_naive().format("%Y-%m-%d")
+        ));
+        let yesterday_file = dir.join(format!(
+            "ledger-{}.jsonl",
+            yesterday.date_naive().format("%Y-%m-%d")
+        ));
+        assert!(base.exists(), "current base must still exist");
+        assert!(
+            !today_file.exists(),
+            "today's entries must stay in base, not be renamed out"
+        );
+        assert!(
+            yesterday_file.exists(),
+            "backdated entry goes to its own file"
+        );
+
+        let all = Ledger::read_all(&base).unwrap();
+        assert_eq!(all.len(), 2, "read_all spans base + backdated file");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
