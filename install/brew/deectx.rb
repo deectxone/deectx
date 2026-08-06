@@ -1,15 +1,33 @@
 class Deectx < Formula
   desc "Local-first PII-masking proxy for AI coding tools"
   homepage "https://github.com/deectxone/deectx"
-  url "https://crates.io/api/v1/crates/deectx/0.1.0/download"
-  sha256 "47f4fd30de1f9773f1b8a07968c27c645879bb1bf4435165f5d912cb13df55c1"
+  version "0.1.0"
   license "Apache-2.0"
 
-  depends_on "rust" => :build
+  # Installs the prebuilt release binary — no Rust toolchain or C/C++ linker
+  # needed. URLs and hashes point at the per-target archives attached to the
+  # GitHub release; the release workflow refreshes `version` and the three
+  # sha256 values automatically (see .github/workflows/release.yml).
+  on_macos do
+    on_arm do
+      url "https://github.com/deectxone/deectx/releases/download/v#{version}/deectx-aarch64-apple-darwin.tar.gz"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    end
+    on_intel do
+      url "https://github.com/deectxone/deectx/releases/download/v#{version}/deectx-x86_64-apple-darwin.tar.gz"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    end
+  end
 
-  # Installs the crate from crates.io via `cargo install deectx@0.1.0`.
+  on_linux do
+    on_intel do
+      url "https://github.com/deectxone/deectx/releases/download/v#{version}/deectx-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    end
+  end
+
   def install
-    system "cargo", "install", "deectx@0.1.0", "--root", prefix
+    bin.install "deectx"
   end
 
   test do

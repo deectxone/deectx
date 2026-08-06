@@ -87,21 +87,48 @@ jobs:
       - name: Refresh Homebrew and Scoop manifests
         run: |
           set -euo pipefail
-          # Homebrew formula installs from the crates.io source crate (same on
-          # all platforms); fetch its sha256 from the crates.io API.
           VERSION="${GITHUB_REF_NAME#v}"
-          CRATE_SHA=$(curl -fsSL "https://crates.io/api/v1/crates/deectx/$VERSION/download" \
-            -o /tmp/deectx.crate && shasum -a 256 /tmp/deectx.crate | awk '{print $1}')
-          sed -i "s/sha256 \".*\"/sha256 \"$CRATE_SHA\"/" install/brew/deectx.rb
+          export VERSION
 
-          # Scoop uses the Windows zip; recompute its hash from the artifact.
+          # Homebrew installs the prebuilt per-target release archives (no Rust
+          # toolchain / linker). Bump the formula version and refresh each
+          # arch's sha256 from the built artifacts. Idempotent across releases.
+          python - <<'EOF'
+          import hashlib, os, pathlib, re
+          version = os.environ["VERSION"]
+          formula = pathlib.Path("install/brew/deectx.rb")
+          text = formula.read_text()
+          text = re.sub(r'version "[^"]*"', f'version "{version}"', text, count=1)
+          targets = {
+              "aarch64-apple-darwin":     "dist/deectx-aarch64-apple-darwin.tar.gz",
+              "x86_64-apple-darwin":      "dist/deectx-x86_64-apple-darwin.tar.gz",
+              "x86_64-unknown-linux-gnu": "dist/deectx-x86_64-unknown-linux-gnu.tar.gz",
+          }
+          for target, art in targets.items():
+              digest = hashlib.sha256(pathlib.Path(art).read_bytes()).hexdigest()
+              text = re.sub(
+                  r'(deectx-' + re.escape(target) + r'\.tar\.gz"\s*\n\s*sha256 ")[0-9a-f]*(")',
+                  lambda m, d=digest: m.group(1) + d + m.group(2),
+                  text,
+              )
+          formula.write_text(text)
+          EOF
+
+          # Scoop uses the Windows zip; bump version + url and recompute its hash.
           WIN_SHA=$(shasum -a 256 dist/deectx-x86_64-pc-windows-msvc.zip | awk '{print $1}')
           export WIN_SHA
           python - <<'EOF'
           import json, os, pathlib
+          version = os.environ["VERSION"]
           p = pathlib.Path("install/scoop/deectx.json")
           m = json.loads(p.read_text())
-          m["architecture"]["64bit"]["hash"] = os.environ["WIN_SHA"]
+          m["version"] = version
+          arch = m["architecture"]["64bit"]
+          arch["hash"] = os.environ["WIN_SHA"]
+          arch["url"] = (
+              "https://github.com/deectxone/deectx/releases/download/"
+              f"v{version}/deectx-x86_64-pc-windows-msvc.zip"
+          )
           p.write_text(json.dumps(m, indent=2) + "\n")
           EOF
 
@@ -125,4 +152,34 @@ jobs:
           else
             git commit -m "release: refresh brew + scoop manifests for ${{ github.ref_name }}"
             git push origin "HEAD:$DEFAULT"
+          fi
+
+      - name: Push manifest to scoop-deectx bucket
+        # The bucket lives in a separate repo (Scoop requires manifests at the
+        # bucket root, not nested under install/scoop/ in the main repo) so
+        # this needs a PAT with write access to deectxone/scoop-deectx —
+        # GITHUB_TOKEN only covers the current repo. Skipped if the secret
+        # isn't configured yet.
+        env:
+          BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUCKET_TOKEN}" ]; then
+            echo "SCOOP_BUCKET_TOKEN not set; skipping scoop-deectx bucket push."
+            echo "See install/scoop/README.md for setup."
+            exit 0
+          fi
+          rm -rf /tmp/scoop-deectx
+          git clone "https://x-access-token:${BUCKET_TOKEN}@github.com/deectxone/scoop-deectx.git" /tmp/scoop-deectx
+          mkdir -p /tmp/scoop-deectx/bucket
+          cp install/scoop/deectx.json /tmp/scoop-deectx/bucket/deectx.json
+          cd /tmp/scoop-deectx
+          git config user.name "deectx-release-bot"
+          git config user.email "deectx-bot@users.noreply.github.com"
+          git add bucket/deectx.json
+          if git diff --cached --quiet; then
+            echo "No manifest changes for scoop-deectx."
+          else
+            git commit -m "release: deectx ${{ github.ref_name }}"
+            git push origin HEAD:master
           fi

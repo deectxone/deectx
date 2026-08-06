@@ -35,3 +35,21 @@ tokenizers = { version = "0.20", optional = true }
 name = "ner_spike"
 path = "src/bin/ner_spike.rs"
 required-features = ["ner"]
+
+# cargo-binstall: download prebuilt release archives instead of compiling from
+# source (no C/C++ linker needed). Our release archives contain the bare binary
+# at the root, so bin-dir must point at it directly rather than binstall's
+# default `{ name }-{ target }/` subdirectory.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-fmt = "tgz"

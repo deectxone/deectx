@@ -53,19 +53,55 @@ text → DetectorChain ─┬─ Regex (email, IBAN, cards, … + Luhn/Mod97/Ato
 
 ## Install
 
-Builds are available for **Windows (x86_64)**, **macOS (Intel + Apple Silicon)**,
-and **Linux (x86_64)**. Choose whichever is easiest:
+Prebuilt binaries are published for **Windows (x86_64)**, **macOS (Intel + Apple
+Silicon)**, and **Linux (x86_64)**. The paths below **download a prebuilt binary
+— no compiler or C/C++ linker required** — and are the recommended way in:
 
-- **Cargo (recommended, all platforms)**: `cargo install deectx`
-- **Homebrew (macOS/Linux)**: `brew tap deectxone/deectx && brew install deectx`
-- **Scoop (Windows)**: `scoop install deectx`
+- **Scoop (Windows, recommended)**:
+  ```powershell
+  scoop bucket add deectx https://github.com/deectxone/scoop-deectx
+  scoop install deectx
+  ```
+- **cargo-binstall (all platforms)** — cargo-native, fetches the release archive
+  instead of compiling (one-time: `cargo install cargo-binstall`):
+  ```bash
+  cargo binstall deectx
+  ```
+- **Homebrew (macOS/Linux)** — installs the prebuilt release binary, no linker:
+  ```bash
+  brew tap deectxone/deectx && brew install deectx
+  ```
 - **Binary zip/tarball**: download from
-  [GitHub Releases](https://github.com/deectxone/deectx/releases) — each release
-  is built for all four targets by CI.
+  [GitHub Releases](https://github.com/deectxone/deectx/releases) — one archive
+  per target, built by CI.
 
-All three package paths ship and are refreshed automatically on release.
-> Prefer building from source? `cargo install --path .` or `cargo build --release`
-> (see [Development](#development)).
+Building **from source** instead (needs a working C/C++ linker — see
+[Troubleshooting](#troubleshooting) if the build fails):
+
+- **Cargo**: `cargo install deectx`
+- **Local checkout**: `cargo install --path .` or `cargo build --release`
+  (see [Development](#development)).
+
+All package paths ship and are refreshed automatically on release. Scoop
+requires adding the bucket once before `scoop install deectx` will work —
+deectx isn't in Scoop's main bucket.
+
+### First time? Install the package manager first
+
+Each path needs its tool present. If a command errors with *"not recognized"* /
+*"command not found"*, install the prerequisite, open a **new** terminal, then retry:
+
+- **Scoop** (Windows) — in PowerShell:
+  ```powershell
+  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+  Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
+  ```
+- **Rust / Cargo** (for `cargo binstall` or `cargo install`) — install via
+  [rustup.rs](https://rustup.rs). On Windows that's `winget install Rustlang.Rustup`;
+  on macOS/Linux, `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
+  Then enable binstall once: `cargo install cargo-binstall`.
+- **Homebrew** (macOS/Linux) — from [brew.sh](https://brew.sh):
+  `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
 
 ## Quick start (2 minutes)
 
@@ -208,6 +244,46 @@ scripts/release.ps1  (Windows) / scripts/release.sh  → builds zip + computes S
 
 ## Troubleshooting
 
+> **Fastest fix for any build error below:** don't build at all. `scoop install`
+> (Windows) or `cargo binstall deectx` (all platforms) download a prebuilt binary
+> and need no compiler or linker. See [Install](#install).
+
+### `cargo install deectx` fails on Windows with `link.exe not found`
+
+If your default Rust toolchain is `x86_64-pc-windows-msvc` (the Windows default)
+and Visual C++ build tools aren't installed, `cargo install` fails with:
+
+```text
+error: linker `link.exe` not found
+note: the msvc targets depend on the msvc linker but `link.exe` was not found
+note: please ensure that Visual Studio 2017 or later, or Build Tools for Visual
+      Studio were installed with the Visual C++ option
+```
+
+**Cause.** `cargo install` compiles from source, and the MSVC target links with
+`link.exe`, which ships only with the Visual C++ toolchain — not with Rust, and
+not with VS Code. This is an environment prerequisite, not a deeCtx bug.
+
+**Fix (pick one):**
+
+1. **Skip the build entirely (recommended)** — install a prebuilt binary:
+   ```powershell
+   scoop bucket add deectx https://github.com/deectxone/scoop-deectx
+   scoop install deectx
+   # or, cargo-native:
+   cargo binstall deectx
+   ```
+2. **Install the MSVC linker** — Build Tools for Visual Studio with the
+   **"Desktop development with C++"** workload (provides `link.exe`), then retry
+   `cargo install deectx`.
+3. **Use the GNU toolchain**, which bundles its own linker (no Visual Studio),
+   but see the `dlltool` note below:
+   ```powershell
+   rustup toolchain install stable-x86_64-pc-windows-gnu
+   rustup default stable-x86_64-pc-windows-gnu
+   cargo install deectx
+   ```
+
 ### `cargo install deectx` fails on Windows with a `dlltool` error
 
 If your default Rust toolchain is `x86_64-pc-windows-gnu`, building from source
@@ -240,8 +316,47 @@ environment issue, not a deeCtx bug.
    rustup default stable-x86_64-pc-windows-msvc
    cargo install deectx
    ```
-3. **Skip the build entirely** — use a prebuilt release binary or
-   `scoop install deectx` (see [Install](#install)).
+3. **Skip the build entirely** — use a prebuilt release binary, or Scoop:
+   ```powershell
+   scoop bucket add deectx https://github.com/deectxone/scoop-deectx
+   scoop install deectx
+   ```
+   (see [Install](#install)).
+
+### `scoop install deectx` fails with `Couldn't find manifest for 'deectx'`
+
+deectx isn't in Scoop's main bucket, so `scoop install deectx` on its own will
+always fail with this error. Add the deectx bucket first, then install:
+
+```powershell
+scoop bucket add deectx https://github.com/deectxone/scoop-deectx
+scoop install deectx
+```
+
+---
+
+## Updating & uninstalling
+
+Update in place — same tool you installed with:
+
+| Installed with | Update | Uninstall |
+|----------------|--------|-----------|
+| Scoop | `scoop update deectx` | `scoop uninstall deectx` |
+| cargo-binstall | `cargo binstall deectx` (re-run) | `cargo uninstall deectx` |
+| Cargo | `cargo install deectx` (re-run) | `cargo uninstall deectx` |
+| Homebrew | `brew upgrade deectx` | `brew uninstall deectx` |
+
+**Before removing the binary,** undo the machine-level wiring `deectx setup`
+created (safe to run even if you never ran `setup`):
+
+```bash
+deectx unwrap            # restore every tool config from its .bak backup
+deectx daemon-uninstall  # remove the login autostart entry
+```
+
+Then remove the binary with the uninstall command for your install path above.
+Config files you created (`config.toml`, `ledger.jsonl`) are never touched by
+uninstall — delete them by hand if you want them gone.
 
 ---
 
