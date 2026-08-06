@@ -1,0 +1,51 @@
+name: agents-doc-freshness
+
+# Nudges (does not block) when key source changes land without an AGENTS.md
+# update, so the cross-agent context file doesn't silently drift. Flip the
+# `::warning::` line to `exit 1` if you want it to be a hard gate.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Warn if AGENTS.md is stale
+        shell: bash
+        env:
+          # Files whose change usually means AGENTS.md should be revisited.
+          KEY_RE: '^(src/|Cargo\.toml$)'
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+          # First push / new branch (all-zero or empty base): nothing to diff.
+          if [ -z "${base:-}" ] || printf '%s' "$base" | grep -Eq '^0+$'; then
+            echo "No base commit to compare; skipping."
+            exit 0
+          fi
+          changed="$(git diff --name-only "$base" "$head" || true)"
+          echo "Changed files:"; printf '%s\n' "$changed"
+          if printf '%s\n' "$changed" | grep -Eq "$KEY_RE"; then
+            if printf '%s\n' "$changed" | grep -qx "AGENTS.md"; then
+              echo "AGENTS.md was updated alongside source changes. 👍"
+            else
+              echo "::warning file=AGENTS.md::Source changed but AGENTS.md was not updated — refresh it if structure, commands, config, or behavior changed."
+            fi
+          else
+            echo "No key source changes; AGENTS.md freshness check not applicable."
+          fi
