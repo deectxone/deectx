@@ -12,6 +12,15 @@ permissions:
   id-token: write
   attestations: write
 
+# Serialize release runs for the same tag. Two concurrent runs (e.g. after a
+# re-tag) would race to upload the archives and push manifests; because the
+# Windows zip / .tar.gz archives are not byte-deterministic, that desyncs the
+# published scoop/brew hash from the actually-served asset. Queue, don't cancel,
+# so each run finishes and the last one leaves a consistent asset+manifest pair.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: build (${{ matrix.target }})
