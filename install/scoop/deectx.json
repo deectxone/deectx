@@ -1,23 +1,23 @@
 {
-    "version":  "0.2.0",
-    "license":  "Apache-2.0",
-    "autoupdate":  {
-                       "architecture":  {
-                                            "64bit":  {
-                                                          "url":  "https://github.com/deectxone/deectx/releases/download/v$version/deectx-x86_64-pc-windows-msvc.zip"
-                                                      }
-                                        }
-                   },
-    "architecture":  {
-                         "64bit":  {
-                                       "hash":  "0959cff846b740c625570757d90b983ab9fe545ea2ca0bc70611bd051630f51a",
-                                       "url":  "https://github.com/deectxone/deectx/releases/download/v0.2.0/deectx-x86_64-pc-windows-msvc.zip"
-                                   }
-                     },
-    "description":  "Local-first PII-masking proxy for AI coding tools",
-    "checkver":  {
-                     "github":  "https://github.com/deectxone/deectx"
-                 },
-    "homepage":  "https://github.com/deectxone/deectx",
-    "bin":  "deectx.exe"
+  "version": "0.2.0",
+  "license": "Apache-2.0",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/deectxone/deectx/releases/download/v$version/deectx-x86_64-pc-windows-msvc.zip"
+      }
+    }
+  },
+  "architecture": {
+    "64bit": {
+      "hash": "1a294cc7f0c9e304a31037900cd07a6aff6fc19bcba79fff21af37ab79c9c8d2",
+      "url": "https://github.com/deectxone/deectx/releases/download/v0.2.0/deectx-x86_64-pc-windows-msvc.zip"
+    }
+  },
+  "description": "Local-first PII-masking proxy for AI coding tools",
+  "checkver": {
+    "github": "https://github.com/deectxone/deectx"
+  },
+  "homepage": "https://github.com/deectxone/deectx",
+  "bin": "deectx.exe"
 }
