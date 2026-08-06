@@ -17,13 +17,13 @@ Compress-Archive -Path $bin -DestinationPath $zip
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $manifest = @{
-  version = "0.1.0"
+  version = "0.2.0"
   description = "Local-first PII-masking proxy for AI coding tools"
   homepage = "https://github.com/deectxone/deectx"
   license = "Apache-2.0"
   architecture = @{
     "64bit" = @{
-      url = "https://github.com/deectxone/deectx/releases/download/v0.1.0/deectx-x86_64-pc-windows-msvc.zip"
+      url = "https://github.com/deectxone/deectx/releases/download/v0.2.0/deectx-x86_64-pc-windows-msvc.zip"
       hash = $hash
     }
   }
@@ -43,6 +43,6 @@ $manifest = @{
 Write-Host "Built $zip"
 Write-Host "SHA-256: $hash"
 Write-Host "Scoop manifest written to install/scoop/deectx.json"
-Write-Host "Next: tag v0.1.0, attach $zip to the GitHub release, then:"
-Write-Host "  gh release create v0.1.0 $zip --title 'v0.1.0' --notes '...'"
+Write-Host "Next: tag v0.2.0, attach $zip to the GitHub release, then:"
+Write-Host "  gh release create v0.2.0 $zip --title 'v0.2.0' --notes '...'"
 Write-Host "  cargo publish  (from a clean checkout)"
