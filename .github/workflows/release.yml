@@ -7,6 +7,10 @@ on:
 
 permissions:
   contents: write
+  # Keyless Sigstore signing + SLSA/SBOM attestations use short-lived OIDC
+  # tokens — no long-lived signing key to manage or leak.
+  id-token: write
+  attestations: write
 
 jobs:
   build:
@@ -19,7 +23,11 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: deectx-x86_64-unknown-linux-gnu.tar.gz
-          - os: macos-13
+          # Intel macOS is cross-compiled on the arm64 runner (macos-14): the
+          # Intel-only macos-13 runners are being retired and can queue for
+          # hours. Rust cross-compiles x86_64-apple-darwin on Apple silicon
+          # with no linker drama once the target is installed.
+          - os: macos-14
             target: x86_64-apple-darwin
             artifact: deectx-x86_64-apple-darwin.tar.gz
           - os: macos-14
@@ -53,18 +61,46 @@ jobs:
           echo "artifact=$ART" >> "$GITHUB_ENV"
           echo "sha256=$(shasum -a 256 "$ART" | awk '{print $1}')" >> "$GITHUB_ENV"
 
+      - name: Print SHA-256
+        run: echo "${{ matrix.artifact }} -> ${{ env.sha256 }}"
+
+      # --- Supply-chain: sign + attest each binary before it's uploaded ---
+      # SLSA build provenance: cryptographically ties this artifact to this
+      # commit + workflow run, verifiable with `gh attestation verify`.
+      - name: Generate SLSA build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ matrix.artifact }}
+
+      # Detached Sigstore signature so users off GitHub can verify with cosign.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign archive (keyless)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle "${{ matrix.artifact }}.cosign.bundle" \
+            "${{ matrix.artifact }}"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
-      - name: Print SHA-256
-        run: echo "${{ matrix.artifact }} -> ${{ env.sha256 }}"
+      - name: Upload signature bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}.cosign.bundle
+          path: ${{ matrix.artifact }}.cosign.bundle
 
   publish-crate:
     name: Publish to crates.io
-    needs: build
+    # Deliberately NOT `needs: build` — cargo publish runs its own verification
+    # build on Linux and does not need the release artifacts. Decoupling means a
+    # slow/unavailable macOS runner can never block the crates.io publish.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -109,7 +145,25 @@ jobs:
           path: ./dist
           merge-multiple: true
 
-      - name: Upload binaries to release ${{ github.ref_name }}
+      # CycloneDX SBOM from the source tree (Cargo.lock) — one bill of
+      # materials for the release, attached for downstream vuln review.
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: deectx-sbom.cyclonedx.json
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v2
+        with:
+          subject-path: ./dist/deectx-x86_64-unknown-linux-gnu.tar.gz
+          sbom-path: deectx-sbom.cyclonedx.json
+
+      - name: Stage SBOM for release upload
+        run: cp deectx-sbom.cyclonedx.json ./dist/deectx-sbom.cyclonedx.json
+
+      - name: Upload binaries + signatures + SBOM to release ${{ github.ref_name }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
