@@ -1,0 +1,40 @@
+name: scorecard
+
+# OpenSSF Scorecard — automated, free assessment of this repo's security
+# posture (branch protection, pinned deps, signed releases, token perms, …).
+# Results publish to the Scorecard dashboard and the code-scanning tab, and can
+# be surfaced as a README badge via api.securityscorecards.dev.
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: '31 5 * * 1'   # weekly, Mondays
+  push:
+    branches: [ master ]
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # upload results to code-scanning
+      id-token: write          # publish results to the public dashboard
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload SARIF to code-scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif

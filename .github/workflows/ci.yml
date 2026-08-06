@@ -47,6 +47,19 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+  audit:
+    name: Dependency audit (RUSTSEC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Scans Cargo.lock against the RUSTSEC advisory DB for known-vulnerable
+      # or yanked dependencies. Fails CI on any advisory so we never ship one.
+      - name: cargo audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   build-artifacts:
     name: Build release artifacts
     needs: [lint, test]
