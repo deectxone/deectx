@@ -36,8 +36,19 @@ pub(crate) enum ApiFormat {
 
 pub async fn run_proxy(cfg: Config) -> Result<()> {
     let listener = TcpListener::bind(&cfg.listen).await?;
-    tracing::info!("deectx listening on {}", cfg.listen);
-    serve_with_listener(cfg, listener).await
+    let actual = listener.local_addr()?.to_string();
+    tracing::info!("deectx listening on {}", actual);
+    let pf = crate::home::Pidfile {
+        pid: std::process::id(),
+        listen: actual,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    if let Err(e) = pf.write() {
+        tracing::warn!("could not write pidfile: {e}");
+    }
+    let res = serve_with_listener(cfg, listener).await;
+    crate::home::Pidfile::clear();
+    res
 }
 
 pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<()> {
