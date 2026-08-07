@@ -128,27 +128,31 @@ its model base URL to the proxy works too (see “AI tool support” below).
 ## Quick start: install-and-forget
 
 ```bash
-deectx setup
+deectx start
 ```
 
-One command discovers your installed tools and points them at the local proxy
-(`http://127.0.0.1:8787`):
+One command turns deeCtx **on**: it discovers your installed tools, points them at
+the local proxy (`http://127.0.0.1:8787`), and starts masking:
 
 - **Wires Claude Code, Codex, and opencode** to the proxy, backing up every
   patched file to `<path>.bak` first (existing backups are never overwritten;
   re-running is idempotent). Tools locked to OAuth accounts (Claude Pro/Max,
   Copilot built-in) are skipped with a message.
-- **Installs the autostart daemon** so the proxy starts at login
-  (`deectx daemon-install` / `deectx daemon-uninstall` manage it manually).
+- **Installs the autostart daemon** so the proxy starts at login, and starts it
+  now. Re-running `deectx start` after an update replaces a stale proxy.
 
-Then verify and live with it:
+Then live with it:
 
 ```bash
-deectx doctor          # per-tool wiring status
-deectx unwrap          # restore all original configs from .bak
-deectx status          # live masked/redacted counts from /stats
-deectx status --json   # raw JSON
+deectx                 # status dashboard: on/off, wired tools, warnings
+deectx stop            # turn OFF — restore tools to direct API + stop the proxy
+deectx uninstall       # remove deeCtx (prompts before deleting your data)
+deectx audit --today   # hash-only ledger summary
+deectx status          # live masked/redacted counts from the running proxy's /stats
 ```
+
+deeCtx stores its config and audit ledger in **`~/.deectx/`** (`config.toml`,
+`ledger.jsonl`). `setup` and `unwrap` remain as aliases of `start`/`stop`.
 
 The proxy routes by API-key shape — Anthropic keys (`sk-ant-…`) go to the
 Anthropic upstream, OpenAI keys (`sk-…`) to the OpenAI upstream — so one proxy

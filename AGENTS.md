@@ -10,24 +10,35 @@ Deep design discussion lives in `ARCHITECTURE.md`. Keep this file current — se
 reverse proxy** for AI coding tools. It sits between the tool (Cursor, opencode, Claude
 Code, Codex, Copilot CLI) and an upstream AI API (OpenAI / Anthropic), masks secrets and
 personal data before they leave the machine, stores a privacy-safe ledger locally, and lets
-the user audit what was masked.
+the user audit what was masked. It is a **transparent** proxy: endpoints it doesn't handle
+explicitly are forwarded verbatim, so wired tools never break.
 
 Must stay **OSS-pure**: this is the open-source, privacy-preserving core. No org/telemetry/user
 identity features here — those live in the commercial `deectx-pro` companion repo.
 
 ## Commands
 
+Lifecycle (the guided surface — states are ACTIVE ⇄ OFF):
+
 ```bash
-deectx serve --config config.toml   # run the masking proxy (default http://127.0.0.1:8787)
-deectx audit --config config.toml --today            # human-readable ledger summary
-deectx audit --config config.toml --today --export - # JSON to stdout (path or - )
-deectx status [--json]              # live masked/redacted counters from the proxy's /stats
-deectx setup                        # auto-wire installed tools + install autostart daemon
-deectx doctor                       # per-tool wiring status
-deectx unwrap                       # restore original tool configs from .bak backups
-deectx daemon-install               # start the proxy at login (autostart)
-deectx daemon-uninstall             # remove the autostart entry
+deectx                  # status dashboard (running? tools wired? warnings?)
+deectx start            # turn ON: wire tools + install autostart + start masking (idempotent)
+deectx stop             # turn OFF: restore tools to direct API + stop the proxy
+deectx uninstall        # stop + restore tools; prompts to delete data; never removes the binary
 ```
+
+Other:
+
+```bash
+deectx serve            # run the masking proxy (spawned by the daemon / `start`); uses ~/.deectx/config.toml
+deectx audit --today [--export -]   # ledger summary (JSON to stdout with `-`)
+deectx status [--json]  # live masked/redacted counters from the running proxy's /stats
+deectx doctor           # per-tool wiring status
+# aliases: `setup` -> `start`, `unwrap` -> `stop`; `daemon-install`/`daemon-uninstall` remain
+```
+
+Runtime state lives in **`~/.deectx/`** (`$DEECTX_HOME` overrides): `config.toml`,
+`ledger.jsonl`, `deectx.pid` — absolute so the daemon and CLI agree regardless of CWD.
 
 Build / test / lint (all from repo root):
 
@@ -36,7 +47,11 @@ cargo build --release
 cargo test                       # unit + integration tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
-# Windows GNU toolchain: prepend "$env:PATH='C:\msys64\mingw64\bin;'" before cargo (dlltool)
+# Windows without MSVC: build via the GNU toolchain + MSYS2 mingw64 —
+#   CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=C:/msys64/mingw64/bin/gcc.exe
+#   RUSTFLAGS="-C dlltool=C:/msys64/mingw64/bin/dlltool.exe"
+#   cargo +stable-x86_64-pc-windows-gnu test
+# (machine-local only; CI's windows-latest has MSVC and needs none of this.)
 ```
 
 Install paths ship prebuilt binaries first (Scoop / `cargo binstall` / prebuilt Homebrew);
@@ -47,9 +62,11 @@ Install paths ship prebuilt binaries first (Scoop / `cargo binstall` / prebuilt 
 | Path | Responsibility |
 |------|----------------|
 | `src/lib.rs` | Public library surface; `pub mod` exports |
-| `src/main.rs` | CLI (`serve`, `audit`, `status`, `setup`, `doctor`, `unwrap`, `daemon-install/uninstall`) via clap derive |
+| `src/main.rs` | CLI (`start`, `stop`, `uninstall`, bare = status, `serve`, `audit`, `status`, `doctor`, `setup`/`unwrap` aliases, `daemon-*`) via clap derive |
+| `src/lifecycle.rs` | `start`/`stop`/`uninstall`/`status` + `StatusReport`/`render_status`; `ProcessManager` trait (+ `OsProcessManager`) |
+| `src/home.rs` | Runtime home `~/.deectx/` (config/ledger/pidfile paths) + `Pidfile` |
 | `src/config.rs` | `Config` struct + TOML loading, serde defaults |
-| `src/proxy.rs` | axum routes, masking walk, upstream forwarding, rehydration |
+| `src/proxy.rs` | axum routes, transparent fallback, masking walk, method-agnostic forward, rehydration |
 | `src/upstream.rs` | Upstream routing by API-key shape (`sk-ant-…` → Anthropic, `sk-…` → OpenAI) |
 | `src/responses_ws.rs` | `/v1/responses` WebSocket proxy (Codex / Copilot CLI) — masked + rehydrated per frame |
 | `src/sse.rs` | Streaming SSE rehydration (bounded buffers) |
@@ -61,24 +78,24 @@ Install paths ship prebuilt binaries first (Scoop / `cargo binstall` / prebuilt 
 | `src/span.rs` | Detected `Span{start,end,entity,action,text,alert}` |
 | `src/allowlist.rs` | Case-insensitive allowlist filter |
 | `src/chunk.rs` | Text chunking for NER |
-| `src/setup.rs` | Tool discovery + config patching (`setup`/`doctor`/`unwrap`) + autostart daemon install/uninstall |
+| `src/setup.rs` | Tool discovery + config patching + autostart daemon install/uninstall |
 | `src/detect/` | `mod.rs` (chain), `regex.rs`, `secrets.rs`, `ner.rs` (feature `ner`) |
 | `src/packs/` | Pack YAML definitions: `default`, `gdpr`, `cdr-au` + loader |
 | `config.example.toml` | Documented example config |
 | `shims/` | Integration shims for Cursor + opencode |
 | `install/` | Homebrew formula + Scoop manifest (`release.yml` refreshes hashes on tag) |
 | `scripts/` | `release.ps1`, `release.sh` (build + package) |
-| `tests/` | `proxy_integration.rs`, `golden_set.rs`, `installers.rs` |
+| `tests/` | `proxy_integration.rs`, `passthrough_integration.rs`, `golden_set.rs`, `installers.rs` |
 | `.github/workflows/` | `ci.yml` (fmt+clippy+test), `release.yml` (tag builds + publish), `agents-doc-freshness.yml` |
 
 ## Core concepts
 
 ### Config (`src/config.rs`)
-TOML file (`config.toml` default). Fields: `listen` (127.0.0.1:8787), `upstream`
+TOML file (`~/.deectx/config.toml` default). Fields: `listen` (127.0.0.1:8787), `upstream`
 (`https://api.openai.com`), `upstream_anthropic`, `upstream_responses`, `ledger_path`
-(`./ledger.jsonl`), `ledger_retention_days` (90), `active_packs`, `packs_dir`, `model_dir`,
-`allowlist`, `ner`, `stats_enabled`. Partial files fill unspecified fields from serde
-defaults. **No env-var config.**
+(default `~/.deectx/ledger.jsonl`), `ledger_retention_days` (90), `active_packs`, `packs_dir`,
+`model_dir`, `allowlist`, `ner`, `stats_enabled`. Partial files fill unspecified fields from
+serde defaults. **No env-var config** (the only env override is `DEECTX_HOME`, a path).
 
 ### Detection pipeline (`src/detect/`, `src/packs/`)
 Packs compose detectors. `DetectorChain` runs all detectors, merges spans (longest wins at same
@@ -105,21 +122,23 @@ Stores only hashes — never raw PII. `LedgerEvent{entity, placeholder, ph_hash,
 
 ### Proxy (`src/proxy.rs`, `src/upstream.rs`, `src/responses_ws.rs`)
 Routes: `GET /healthz`, `GET /stats`, `POST /v1/chat/completions` (OpenAI), `POST /v1/messages`
-(Anthropic), and the `/v1/responses` WebSocket. Routing picks the upstream by API-key shape.
-`mask_walk` walks JSON (recursing into JSON-encoded tool args byte-preserving); streams via
-`SseRehydrator`; non-streams rehydrated via `rehydrate_response`; WS frames masked/rehydrated
-per frame in `responses_ws.rs`.
+(Anthropic), the `/v1/responses` WebSocket, and a **catch-all `fallback`** (`handle_passthrough`)
+for everything else. `passthrough_should_mask` masks prompt-bearing endpoints
+(`/v1/messages/count_tokens`) via the same `mask_walk`; other paths (`/v1/models`, …) forward
+verbatim. Completions and passthrough share the method-agnostic `forward`. Streams via
+`SseRehydrator`; non-streams rehydrated via `rehydrate_response`; WS frames per frame.
 
-### Setup / autostart (`src/setup.rs`)
-`discover()` finds installed tools; `patch_config` rewrites their base URL to the proxy (backing
-up to `<path>.bak`, idempotent); OAuth-locked tools are skipped. `install_daemon` /
-`uninstall_daemon` manage the per-OS login autostart entry. `doctor()` reports wiring; `unwrap()`
-restores from `.bak`.
+### Lifecycle & autostart (`src/lifecycle.rs`, `src/setup.rs`)
+`lifecycle::start` (idempotent) stops any running/stale proxy (via `deectx.pid` + `ProcessManager`),
+wires tools, installs the login autostart, and spawns `serve`; `stop` unwraps tools + kills the
+proxy + removes autostart; `uninstall` = stop + optional data delete. `setup.rs` still owns the
+low-level tool `discover`/`patch_config`/`unwrap` and the per-OS daemon artifacts.
 
 ## Conventions
 - Rust 2021, `anyhow` for errors, serde derive, chrono UTC. Tests live next to code
   (and in `tests/`); TDD. `cargo fmt` + `clippy -D warnings` must be clean.
-- No env-var config (TOML only). No raw PII written anywhere; hashes only.
+- No env-var config (TOML only); `DEECTX_HOME` is the sole path override. No raw PII written
+  anywhere; hashes only.
 - Match existing module boundaries — add features as new focused `src/` files, exported from
   `lib.rs`, never pile into `proxy.rs`.
 
@@ -129,6 +148,7 @@ restores from `.bak`.
 - New route / upstream format → `src/proxy.rs` (+ `upstream.rs` for routing, `responses_ws.rs` for WS).
 - Masking semantics → `src/masker.rs`. Ledger shape → `src/ledger.rs`. Reporting → `src/audit.rs`.
 - Live counters → `src/stats.rs` / `src/status.rs`.
+- Lifecycle / start-stop / process mgmt → `src/lifecycle.rs`. Runtime paths / pidfile → `src/home.rs`.
 - Tool wiring / autostart → `src/setup.rs`. CLI surface → `src/main.rs`. Defaults → `src/config.rs`.
 
 ## Maintenance
