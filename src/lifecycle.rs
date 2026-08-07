@@ -8,6 +8,9 @@ pub trait ProcessManager {
     fn spawn_serve(&self) -> anyhow::Result<u32>;
     /// True if a process with `pid` is currently alive.
     fn is_alive(&self, pid: u32) -> bool;
+    /// True if `pid` is alive AND is a deectx process. Guards against killing an
+    /// unrelated process that reused a stale pidfile's PID after a crash/reboot.
+    fn is_deectx(&self, pid: u32) -> bool;
     /// Terminate `pid`.
     fn kill(&self, pid: u32) -> anyhow::Result<()>;
     /// True if `addr` (host:port) is already bound by some process.
@@ -56,11 +59,12 @@ pub fn render_status(r: &StatusReport) -> String {
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:8787";
 
-/// Kill a running proxy recorded in the pidfile (if its pid is alive), then
-/// clear the pidfile. Safe when nothing is running.
+/// Kill a running proxy recorded in the pidfile, then clear the pidfile. Only
+/// kills when the PID is alive AND confirmed to be a deectx process, so a
+/// stale pidfile whose PID was reused never kills an unrelated process.
 fn stop_running_proxy<P: ProcessManager>(pm: &P) {
     if let Some(pf) = Pidfile::read() {
-        if pm.is_alive(pf.pid) {
+        if pm.is_alive(pf.pid) && pm.is_deectx(pf.pid) {
             let _ = pm.kill(pf.pid);
         }
         Pidfile::clear();
@@ -92,6 +96,21 @@ fn wire_tools() -> Vec<(Tool, bool)> {
     out
 }
 
+/// Block briefly until the freshly spawned `serve` child writes its pidfile and
+/// is confirmed alive, so the status printed right after `start` reflects the
+/// running proxy instead of racing the spawn. Gives up after ~2s.
+fn await_started<P: ProcessManager>(pm: &P) {
+    for _ in 0..40 {
+        if Pidfile::read()
+            .map(|p| pm.is_alive(p.pid) && pm.is_deectx(p.pid))
+            .unwrap_or(false)
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Turn deeCtx ON. Idempotent: replaces any running/stale proxy with the
 /// current binary, wires tools, installs autostart, and starts serving.
 pub fn start<P: ProcessManager>(pm: &P) -> anyhow::Result<StatusReport> {
@@ -100,6 +119,7 @@ pub fn start<P: ProcessManager>(pm: &P) -> anyhow::Result<StatusReport> {
     let _tools = wire_tools();
     let _ = crate::setup::install_daemon();
     let _pid = pm.spawn_serve()?;
+    await_started(pm);
     status(pm)
 }
 
@@ -128,7 +148,12 @@ pub fn uninstall<P: ProcessManager>(pm: &P, delete_data: bool) -> anyhow::Result
 pub fn status<P: ProcessManager>(pm: &P) -> anyhow::Result<StatusReport> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let pf = Pidfile::read();
-    let running = pf.as_ref().map(|p| pm.is_alive(p.pid)).unwrap_or(false);
+    // "running" means our deectx proxy is alive — not merely that the recorded
+    // PID exists (it may have been reused by an unrelated process).
+    let running = pf
+        .as_ref()
+        .map(|p| pm.is_alive(p.pid) && pm.is_deectx(p.pid))
+        .unwrap_or(false);
 
     let mut tools = Vec::new();
     for (tool, path) in crate::setup::discover() {
@@ -161,8 +186,8 @@ pub fn status<P: ProcessManager>(pm: &P) -> anyhow::Result<StatusReport> {
     })
 }
 
-/// Real process operations. `is_alive`/`kill` shell out to platform tools to
-/// avoid a new native dependency; `port_in_use` probes with a bind.
+/// Real process operations. `is_alive`/`is_deectx`/`kill` shell out to platform
+/// tools to avoid a new native dependency; `port_in_use` probes with a bind.
 pub struct OsProcessManager;
 
 impl ProcessManager for OsProcessManager {
@@ -194,6 +219,27 @@ impl ProcessManager for OsProcessManager {
                 .map(|s| s.success())
                 .unwrap_or(false)
         }
+    }
+
+    fn is_deectx(&self, pid: u32) -> bool {
+        if pid == 0 {
+            return false;
+        }
+        #[cfg(windows)]
+        let image = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output();
+        #[cfg(not(windows))]
+        let image = std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output();
+        image
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .to_ascii_lowercase()
+                    .contains("deectx")
+            })
+            .unwrap_or(false)
     }
 
     fn kill(&self, pid: u32) -> anyhow::Result<()> {
@@ -272,13 +318,28 @@ mod tests {
     impl ProcessManager for FakePm {
         fn spawn_serve(&self) -> anyhow::Result<u32> {
             *self.spawned.borrow_mut() = true;
-            Ok(4242)
+            let pid = 4242;
+            // Emulate the real serve: register as alive and write the pidfile so
+            // start()'s await_started/status observe a running proxy.
+            self.alive.borrow_mut().push(pid);
+            Pidfile {
+                pid,
+                listen: "127.0.0.1:8787".into(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            }
+            .write()
+            .ok();
+            Ok(pid)
         }
         fn is_alive(&self, pid: u32) -> bool {
             self.alive.borrow().contains(&pid)
         }
+        fn is_deectx(&self, pid: u32) -> bool {
+            self.alive.borrow().contains(&pid)
+        }
         fn kill(&self, pid: u32) -> anyhow::Result<()> {
             self.killed.borrow_mut().push(pid);
+            self.alive.borrow_mut().retain(|&p| p != pid);
             Ok(())
         }
         fn port_in_use(&self, _addr: &str) -> bool {
@@ -330,6 +391,10 @@ mod tests {
             crate::home::config_path().exists(),
             "config.toml must be created"
         );
+        assert!(
+            report.running,
+            "status after start must reflect the running proxy"
+        );
         assert_eq!(report.current_version, env!("CARGO_PKG_VERSION"));
         std::env::remove_var("DEECTX_HOME");
         let _ = std::fs::remove_dir_all(&dir);
@@ -355,6 +420,47 @@ mod tests {
 
         assert!(pm.killed.borrow().contains(&555));
         assert!(Pidfile::read().is_none(), "pidfile must be cleared");
+        std::env::remove_var("DEECTX_HOME");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_pidfile_with_foreign_pid_is_not_killed() {
+        let _g = crate::home::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let dir = isolated_home("foreign");
+        Pidfile {
+            pid: 777,
+            listen: "127.0.0.1:8787".into(),
+            version: "0.2.0".into(),
+        }
+        .write()
+        .unwrap();
+        // A ProcessManager where 777 is alive but NOT a deectx process (PID reuse).
+        struct ForeignPm;
+        impl ProcessManager for ForeignPm {
+            fn spawn_serve(&self) -> anyhow::Result<u32> {
+                Ok(1)
+            }
+            fn is_alive(&self, _pid: u32) -> bool {
+                true
+            }
+            fn is_deectx(&self, _pid: u32) -> bool {
+                false
+            }
+            fn kill(&self, _pid: u32) -> anyhow::Result<()> {
+                panic!("must not kill a foreign PID");
+            }
+            fn port_in_use(&self, _addr: &str) -> bool {
+                false
+            }
+        }
+        stop(&ForeignPm).unwrap();
+        assert!(
+            Pidfile::read().is_none(),
+            "stale pidfile must still be cleared"
+        );
         std::env::remove_var("DEECTX_HOME");
         let _ = std::fs::remove_dir_all(&dir);
     }

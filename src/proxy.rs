@@ -247,6 +247,24 @@ async fn handle_passthrough(
             if let Ok(v) = serde_json::to_vec(&json) {
                 out_body = Bytes::from(v);
             }
+            // Record the count_tokens masking to the hash-only ledger, like a
+            // completion, so `deectx audit` counts it.
+            let tool = headers
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            let entry = crate::ledger::LedgerEntry {
+                ts: chrono::Utc::now(),
+                tool,
+                session,
+                events,
+                latency_ms: 0,
+                packs: st.packs.clone(),
+            };
+            if let Err(e) = st.ledger.append(&entry) {
+                tracing::warn!("ledger append failed: {e}");
+            }
         }
     }
 
@@ -361,10 +379,15 @@ pub(crate) fn mask_content(
     Some(masked)
 }
 
-/// Unmatched endpoints that still carry the full prompt and MUST be masked
-/// before forwarding. `count_tokens` sends the same `messages` array as a
-/// completion; everything else (models, batches, files) carries no maskable
-/// user content and is forwarded verbatim.
+/// Whether an unmatched, prompt-bearing endpoint's request body must be masked
+/// before forwarding. `/v1/messages/count_tokens` carries the same `messages`
+/// array as a completion, so it is masked here.
+///
+/// KNOWN LIMITATION: other prompt-bearing endpoints the fallback forwards —
+/// `/v1/messages/batches`, legacy `/v1/completions`, `/v1/embeddings` — are
+/// currently forwarded VERBATIM (their bodies are not masked, and their later
+/// results can't be rehydrated by this stateless proxy). Non-prompt endpoints
+/// (`/v1/models`, files) carry no maskable content.
 pub(crate) fn passthrough_should_mask(path: &str) -> bool {
     path.ends_with("/messages/count_tokens")
 }
