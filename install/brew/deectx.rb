@@ -1,7 +1,7 @@
 class Deectx < Formula
   desc "Local-first PII-masking proxy for AI coding tools"
   homepage "https://github.com/deectxone/deectx"
-  version "0.2.0"
+  version "0.2.1"
   license "Apache-2.0"
 
   # Installs the prebuilt release binary — no Rust toolchain or C/C++ linker
@@ -11,18 +11,18 @@ class Deectx < Formula
   on_macos do
     on_arm do
       url "https://github.com/deectxone/deectx/releases/download/v#{version}/deectx-aarch64-apple-darwin.tar.gz"
-      sha256 "dcc6e3e93059ec78887956cedd7f5ab8df24dd272497fca78293f06de3ca5a6b"
+      sha256 "c4c9966e9ed63c3dc9fc2b23453ed4ef17bf300862257a20a0335b122a622573"
     end
     on_intel do
       url "https://github.com/deectxone/deectx/releases/download/v#{version}/deectx-x86_64-apple-darwin.tar.gz"
-      sha256 "51237aa57c4a7c110f6e3df332e64b23fcd526694afb8e18e565b6e8d18016aa"
+      sha256 "f73cc04d34ad3c3bc8bb3451780dd9e0b1b990f876ebff86dd569aefa4d2900a"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/deectxone/deectx/releases/download/v#{version}/deectx-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "d4a70eabe00f587771c01a616cdf51e8defaf196048abd5a3f55981159355390"
+      sha256 "44fcc45b1de240d94eda69228c1ebae132779a3f822fad04fe0fa3789dc821b2"
     end
   end
 
