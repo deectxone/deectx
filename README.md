@@ -6,6 +6,7 @@
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
 <a href="https://crates.io/crates/deectx"><img src="https://img.shields.io/crates/v/deectx" alt="crates.io"></a>
 <a href="https://github.com/deectxone/deectx/releases"><img src="https://img.shields.io/github/v/release/deectxone/deectx" alt="GitHub release"></a>
+<a href="https://www.bestpractices.dev/projects/13981"><img src="https://www.bestpractices.dev/projects/13981/badge" alt="OpenSSF Best Practices"></a>
 </div>
 
 deeCtx sits between your AI coding agent and the model API. It scans every prompt
