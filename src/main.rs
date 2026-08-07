@@ -7,20 +7,30 @@ use std::path::PathBuf;
 #[command(name = "deectx", about = "Local PII-masking proxy for AI tools")]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Start the local proxy
+    /// Turn deeCtx on: wire tools, install autostart, start masking
+    Start,
+    /// Turn deeCtx off: restore tools to direct API, stop the proxy
+    Stop,
+    /// Remove deeCtx: stop + restore tools + optionally delete data
+    Uninstall {
+        /// Also delete config + ledger without prompting
+        #[arg(long)]
+        purge: bool,
+    },
+    /// Start the local proxy (run by the autostart daemon / `start`)
     Serve {
-        #[arg(long, default_value = "config.toml")]
-        config: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
     },
     /// Summarize the hash-only ledger for audit / DPIA reporting
     Audit {
-        #[arg(long, default_value = "config.toml")]
-        config: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
         #[arg(long)]
         today: bool,
         #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = "-")]
@@ -28,17 +38,17 @@ enum Cmd {
     },
     /// Query the running proxy's live /stats endpoint
     Status {
-        #[arg(long, default_value = "config.toml")]
-        config: PathBuf,
+        #[arg(long)]
+        config: Option<PathBuf>,
         /// Print raw JSON.
         #[arg(long)]
         json: bool,
     },
-    /// Auto-wire installed AI tools to the local proxy
+    /// Alias of `start` (auto-wire installed AI tools + start)
     Setup,
     /// Verify which tools are wired to the proxy
     Doctor,
-    /// Restore original configs from .bak backups
+    /// Alias of `stop` (restore original configs from .bak backups)
     Unwrap,
     /// Install the autostart daemon so the proxy runs at login
     DaemonInstall,
@@ -61,8 +71,36 @@ fn load_config(config: &std::path::Path) -> Result<Config> {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
+    let pm = deectx::lifecycle::OsProcessManager;
     match cli.cmd {
-        Cmd::Serve { config } => {
+        None => {
+            let report = deectx::lifecycle::status(&pm)?;
+            println!("{}", deectx::lifecycle::render_status(&report));
+        }
+        Some(Cmd::Start) | Some(Cmd::Setup) => {
+            let report = deectx::lifecycle::start(&pm)?;
+            println!("{}", deectx::lifecycle::render_status(&report));
+        }
+        Some(Cmd::Stop) | Some(Cmd::Unwrap) => {
+            deectx::lifecycle::stop(&pm)?;
+            println!("deeCtx stopped; tools restored to direct API access.");
+        }
+        Some(Cmd::Uninstall { purge }) => {
+            let delete = purge || {
+                use std::io::Write;
+                print!("Also delete config + ledger (audit data)? [y/N] ");
+                std::io::stdout().flush().ok();
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).ok();
+                matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+            };
+            deectx::lifecycle::uninstall(&pm, delete)?;
+            println!(
+                "deeCtx removed. To remove the binary: `scoop uninstall deectx` (or brew/cargo)."
+            );
+        }
+        Some(Cmd::Serve { config }) => {
+            let config = config.unwrap_or_else(deectx::home::config_path);
             let cfg = if config.exists() {
                 Config::load(&config)?
             } else {
@@ -70,11 +108,12 @@ async fn main() -> Result<()> {
             };
             deectx::proxy::run_proxy(cfg).await?;
         }
-        Cmd::Audit {
+        Some(Cmd::Audit {
             config,
             today,
             export,
-        } => {
+        }) => {
+            let config = config.unwrap_or_else(deectx::home::config_path);
             let cfg = load_config(&config)?;
             let summary = if today {
                 deectx::audit::summarize_for_date(
@@ -105,7 +144,8 @@ async fn main() -> Result<()> {
                 Some(p) => std::fs::write(&p, json)?,
             }
         }
-        Cmd::Status { config, json } => {
+        Some(Cmd::Status { config, json }) => {
+            let config = config.unwrap_or_else(deectx::home::config_path);
             let cfg = load_config(&config)?;
             let url = format!("http://{}/stats", cfg.listen);
             let body = match reqwest::blocking::Client::builder()
@@ -129,53 +169,14 @@ async fn main() -> Result<()> {
                 println!("{}", deectx::status::format_status(&body)?);
             }
         }
-        Cmd::Setup => {
-            let found = deectx::setup::discover();
-            if found.is_empty() {
-                println!("deectx setup: no installed tools found to wire");
-            }
-            for (tool, path) in &found {
-                if deectx::setup::is_locked(*tool, path) {
-                    println!("{tool:?}: locked OAuth provider, cannot intercept");
-                    continue;
-                }
-                match deectx::setup::patch_config(*tool, path) {
-                    Err(e) => {
-                        eprintln!("failed to patch {tool:?}: {e}");
-                        continue;
-                    }
-                    Ok(deectx::setup::PatchResult::AlreadyPatched) => {
-                        println!("{tool:?}: already wired")
-                    }
-                    Ok(deectx::setup::PatchResult::Patched) => {
-                        println!("{tool:?}: patched -> {}", path.display())
-                    }
-                }
-            }
-            if let Err(e) = deectx::setup::install_daemon() {
-                println!("daemon install skipped: {e}");
-            } else {
-                println!("autostart daemon installed; proxy will start at login");
-            }
-            let listen = match load_config(&PathBuf::from("config.toml")) {
-                Ok(cfg) => cfg.listen,
-                Err(_) => Config::default().listen,
-            };
-            println!("proxy listen URL: http://{listen}");
-            println!("done; start the proxy: deectx serve");
-        }
-        Cmd::Doctor => {
+        Some(Cmd::Doctor) => {
             println!("{}", deectx::setup::doctor()?);
         }
-        Cmd::Unwrap => {
-            deectx::setup::unwrap()?;
-            println!("restored all original configs");
-        }
-        Cmd::DaemonInstall => {
+        Some(Cmd::DaemonInstall) => {
             deectx::setup::install_daemon()?;
             println!("autostart daemon installed");
         }
-        Cmd::DaemonUninstall => {
+        Some(Cmd::DaemonUninstall) => {
             deectx::setup::uninstall_daemon()?;
             println!("autostart daemon removed");
         }
