@@ -161,6 +161,62 @@ pub fn status<P: ProcessManager>(pm: &P) -> anyhow::Result<StatusReport> {
     })
 }
 
+/// Real process operations. `is_alive`/`kill` shell out to platform tools to
+/// avoid a new native dependency; `port_in_use` probes with a bind.
+pub struct OsProcessManager;
+
+impl ProcessManager for OsProcessManager {
+    fn spawn_serve(&self) -> anyhow::Result<u32> {
+        let exe = std::env::current_exe()?;
+        let child = std::process::Command::new(exe).arg("serve").spawn()?;
+        Ok(child.id())
+    }
+
+    fn is_alive(&self, pid: u32) -> bool {
+        if pid == 0 {
+            return false;
+        }
+        #[cfg(windows)]
+        {
+            let out = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+                .output();
+            match out {
+                Ok(o) => String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()),
+                Err(_) => false,
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
+    }
+
+    fn kill(&self, pid: u32) -> anyhow::Result<()> {
+        #[cfg(windows)]
+        let status = std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .status()?;
+        #[cfg(not(windows))]
+        let status = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            anyhow::bail!("failed to kill pid {pid}")
+        }
+    }
+
+    fn port_in_use(&self, addr: &str) -> bool {
+        std::net::TcpListener::bind(addr).is_err()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +254,13 @@ mod tests {
         assert!(s.contains("OFF"));
         assert!(s.contains("deectx start"));
         assert!(s.contains("⚠ port 8787 in use by another app"));
+    }
+
+    #[test]
+    fn os_pm_reports_self_alive() {
+        let pm = OsProcessManager;
+        assert!(pm.is_alive(std::process::id()), "our own pid must be alive");
+        assert!(!pm.is_alive(0), "pid 0 is never a live user process");
     }
 
     #[derive(Default)]
