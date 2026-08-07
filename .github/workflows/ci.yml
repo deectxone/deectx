@@ -53,12 +53,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Scans Cargo.lock against the RUSTSEC advisory DB for known-vulnerable
-      # or yanked dependencies. Fails CI on any advisory so we never ship one.
+      # Scan Cargo.lock against the RUSTSEC advisory DB for known-vulnerable or
+      # yanked dependencies. cargo-audit is run directly (no GitHub check-run
+      # API, so no elevated token permissions are needed and it works on fork
+      # PRs too); the step exits non-zero on any vulnerability, failing CI.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
       - name: cargo audit
-        uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo audit
 
   build-artifacts:
     name: Build release artifacts

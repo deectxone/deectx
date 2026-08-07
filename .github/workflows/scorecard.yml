@@ -27,8 +27,9 @@ jobs:
         with:
           persist-credentials: false
 
+      # Pin to a concrete release — the floating `@v2` tag is not resolvable.
       - name: Run analysis
-        uses: ossf/scorecard-action@v2
+        uses: ossf/scorecard-action@v2.4.4
         with:
           results_file: results.sarif
           results_format: sarif
