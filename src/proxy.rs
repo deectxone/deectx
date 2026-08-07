@@ -82,7 +82,7 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
     if stats_enabled {
         app = app.route("/stats", axum::routing::get(handle_stats));
     }
-    let app = app.with_state(state);
+    let app = app.fallback(handle_passthrough).with_state(state);
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -181,6 +181,80 @@ async fn handle_stats(State(st): State<Arc<AppState>>) -> axum::Json<crate::stat
     axum::Json(st.stats.snapshot())
 }
 
+/// Transparent reverse-proxy fallback for any endpoint the router does not
+/// explicitly handle (e.g. `/v1/messages/count_tokens`, `/v1/models`). Masks
+/// the request body for prompt-bearing endpoints, forwards everything else
+/// verbatim, so tools that call auxiliary endpoints never break.
+async fn handle_passthrough(
+    State(st): State<Arc<AppState>>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let path = uri.path().to_string();
+    let path_and_query = uri
+        .path_and_query()
+        .map(|p| p.as_str().to_string())
+        .unwrap_or_else(|| path.clone());
+
+    let provider = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(crate::upstream::classify)
+        .unwrap_or(crate::upstream::Provider::Unknown);
+    let anthropic_shaped = path.starts_with("/v1/messages")
+        || headers.contains_key("x-api-key")
+        || headers.contains_key("anthropic-version");
+    let (base, format) = match provider {
+        crate::upstream::Provider::Anthropic => (&st.anthropic_upstream, ApiFormat::Anthropic),
+        crate::upstream::Provider::OpenAI => (&st.upstream, ApiFormat::OpenAI),
+        crate::upstream::Provider::Unknown if anthropic_shaped => {
+            (&st.anthropic_upstream, ApiFormat::Anthropic)
+        }
+        crate::upstream::Provider::Unknown => (&st.upstream, ApiFormat::OpenAI),
+    };
+
+    let method =
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::POST);
+
+    let mut out_body = body.clone();
+    if passthrough_should_mask(&path) {
+        st.stats.record_request();
+        if st.fail_closed && !st.chain.ready() {
+            return Response::builder()
+                .status(503)
+                .body(Body::from(
+                    "deeCtx: failClosed enforcement — masking cannot be guaranteed",
+                ))
+                .unwrap();
+        }
+        if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&body) {
+            let session = session_id(&json);
+            let mut events = Vec::new();
+            mask_walk(&st, &session, &mut events, &mut json);
+            if let Ok(v) = serde_json::to_vec(&json) {
+                out_body = Bytes::from(v);
+            }
+        }
+    }
+
+    // session=None: passthrough responses are returned verbatim (count_tokens
+    // returns a count; other endpoints carry no placeholders to rehydrate).
+    forward(
+        &st,
+        base,
+        method,
+        &path_and_query,
+        headers,
+        out_body,
+        None,
+        format,
+        false,
+    )
+    .await
+}
+
 pub(crate) fn mask_walk(
     st: &AppState,
     session: &str,
@@ -276,6 +350,14 @@ pub(crate) fn mask_content(
     Some(masked)
 }
 
+/// Unmatched endpoints that still carry the full prompt and MUST be masked
+/// before forwarding. `count_tokens` sends the same `messages` array as a
+/// completion; everything else (models, batches, files) carries no maskable
+/// user content and is forwarded verbatim.
+pub(crate) fn passthrough_should_mask(path: &str) -> bool {
+    path.ends_with("/messages/count_tokens")
+}
+
 async fn forward_raw(
     st: &AppState,
     format: ApiFormat,
@@ -299,8 +381,38 @@ async fn forward_raw(
         ApiFormat::OpenAI => "/v1/chat/completions",
         ApiFormat::Anthropic => "/v1/messages",
     };
-    let url = format!("{}{}", base.trim_end_matches('/'), path);
-    let mut req = st.http.post(url).body(body);
+    forward(
+        st,
+        base,
+        reqwest::Method::POST,
+        path,
+        headers,
+        body,
+        session,
+        format,
+        stream,
+    )
+    .await
+}
+
+/// Method-agnostic reverse-proxy forward. `base` is the upstream origin,
+/// `path_and_query` the path (optionally with `?query`). When `session` is
+/// `Some`, non-stream/stream responses are rehydrated for `format`; when
+/// `None`, the response is returned verbatim (transparent passthrough).
+#[allow(clippy::too_many_arguments)]
+async fn forward(
+    st: &AppState,
+    base: &str,
+    method: reqwest::Method,
+    path_and_query: &str,
+    headers: HeaderMap,
+    body: Bytes,
+    session: Option<&str>,
+    format: ApiFormat,
+    stream: bool,
+) -> Response {
+    let url = format!("{}{}", base.trim_end_matches('/'), path_and_query);
+    let mut req = st.http.request(method, url).body(body);
     for (k, v) in headers.iter() {
         let name = k.as_str();
         if name != "host" && name != "content-length" && name != "accept-encoding" {
@@ -319,11 +431,6 @@ async fn forward_raw(
                 }
             }
             if stream {
-                // Mirror the non-stream gzip guard: gzip-like responses stream
-                // through raw. The header check is the meaningful guard here —
-                // the body-based UTF-8 check can't run upfront on a stream, and
-                // feeding compressed bytes through the placeholder rehydrator
-                // would let `pending` grow to O(entire stream) in SseRehydrator.
                 if is_gzip_like_headers(&up_headers) {
                     let raw = up.bytes_stream().map(|r| r.map_err(std::io::Error::other));
                     builder.body(Body::from_stream(raw)).unwrap()
@@ -493,6 +600,12 @@ pub(crate) fn rehydrate_response(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn count_tokens_is_masked_others_are_not() {
+        assert!(passthrough_should_mask("/v1/messages/count_tokens"));
+        assert!(!passthrough_should_mask("/v1/models"));
+        assert!(!passthrough_should_mask("/v1/messages/batches"));
+    }
     use super::*;
 
     #[test]
