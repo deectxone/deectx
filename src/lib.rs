@@ -5,6 +5,7 @@ pub mod config;
 pub mod detect;
 pub mod home;
 pub mod ledger;
+pub mod lifecycle;
 pub mod masker;
 pub mod packs;
 pub mod proxy;
