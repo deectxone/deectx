@@ -77,13 +77,15 @@ impl Pidfile {
     }
 }
 
+/// Serializes tests that mutate the process-global `DEECTX_HOME`/profile env.
+/// Shared across modules (e.g. `config`) so their env-mutating tests don't race
+/// this file's under parallel `cargo test`.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // Serialize env mutation across tests in this file.
-    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn deectx_home_env_override_wins() {

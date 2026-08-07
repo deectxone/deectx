@@ -36,7 +36,7 @@ fn default_upstream() -> String {
     "https://api.openai.com".into()
 }
 fn default_ledger() -> PathBuf {
-    PathBuf::from("./ledger.jsonl")
+    crate::home::ledger_path()
 }
 fn default_retention_days() -> u64 {
     90
@@ -85,5 +85,18 @@ mod tests {
         let cfg = Config::load(&dir).unwrap();
         assert_eq!(cfg.upstream, "https://example.com");
         assert_eq!(cfg.listen, "127.0.0.1:8787");
+    }
+
+    #[test]
+    fn default_ledger_is_under_home() {
+        let _g = crate::home::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        std::env::set_var("DEECTX_HOME", "/tmp/deectx-cfg-home");
+        assert_eq!(
+            Config::default().ledger_path,
+            std::path::PathBuf::from("/tmp/deectx-cfg-home").join("ledger.jsonl")
+        );
+        std::env::remove_var("DEECTX_HOME");
     }
 }
