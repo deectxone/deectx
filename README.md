@@ -26,6 +26,9 @@ APIs. If that context contains emails, phone numbers, IBANs, medical terms,
 Australian CDR fields, or API keys, it leaves your machine. deeCtx minimizes
 what actually leaves — while preserving your workflow.
 
+deeCtx is a **transparent** proxy: endpoints it doesn't handle explicitly are
+forwarded verbatim, so your wired tools keep working.
+
 For a deep dive (data flow, component map, threat model, how to extend), see
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
@@ -103,36 +106,16 @@ Each path needs its tool present. If a command errors with *"not recognized"* /
 - **Homebrew** (macOS/Linux) — from [brew.sh](https://brew.sh):
   `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
 
-## Quick start (2 minutes)
-
-```bash
-# 1. Copy the example config and start the proxy
-cp config.example.toml config.toml
-deectx serve --config config.toml
-# listening on http://127.0.0.1:8787
-
-# 2. Point your AI tool at the proxy
-#    OpenAI-compatible base:  http://127.0.0.1:8787/v1
-#    Anthropic-compatible:    http://127.0.0.1:8787/v1/messages
-```
-
-To enable methods, set `active_packs = ["gdpr"]` (or `["cdr-au"]`) in
-`config.toml`. NER (semantic detection of people, addresses, health terms) is
-optional and requires a GLiNER ONNX model — see both files and
-[`ARCHITECTURE.md`](ARCHITECTURE.md) §5–6.
-
-Tool integration is turnkey for **Cursor** and **opencode** via the shipped
-shims — see [`shims/README.md`](shims/README.md). Any tool that lets you override
-its model base URL to the proxy works too (see “AI tool support” below).
-
 ## Quick start: install-and-forget
+
+The fastest path — one command turns deeCtx **on**:
 
 ```bash
 deectx start
 ```
 
-One command turns deeCtx **on**: it discovers your installed tools, points them at
-the local proxy (`http://127.0.0.1:8787`), and starts masking:
+It discovers your installed tools, points them at the local proxy
+(`http://127.0.0.1:8787`), and starts masking:
 
 - **Wires Claude Code, Codex, and opencode** to the proxy, backing up every
   patched file to `<path>.bak` first (existing backups are never overwritten;
@@ -152,12 +135,39 @@ deectx status          # live masked/redacted counts from the running proxy's /s
 ```
 
 deeCtx stores its config and audit ledger in **`~/.deectx/`** (`config.toml`,
-`ledger.jsonl`). `setup` and `unwrap` remain as aliases of `start`/`stop`.
+`ledger.jsonl`; set `$DEECTX_HOME` to relocate). `setup` and `unwrap` remain as
+aliases of `start`/`stop`.
 
 The proxy routes by API-key shape — Anthropic keys (`sk-ant-…`) go to the
 Anthropic upstream, OpenAI keys (`sk-…`) to the OpenAI upstream — so one proxy
 serves both tools. Codex / Copilot CLI traffic rides the `/v1/responses`
 WebSocket, masked and rehydrated per frame.
+
+## Quick start (manual)
+
+Prefer to run the proxy yourself instead of `deectx start`?
+
+```bash
+# 1. (optional) seed a config — start/serve auto-create ~/.deectx/config.toml
+cp config.example.toml ~/.deectx/config.toml
+
+# 2. Run the proxy (reads ~/.deectx/config.toml by default)
+deectx serve
+# listening on http://127.0.0.1:8787
+
+# 3. Point your AI tool at the proxy
+#    OpenAI-compatible base:  http://127.0.0.1:8787/v1
+#    Anthropic-compatible:    http://127.0.0.1:8787/v1/messages
+```
+
+To enable methods, set `active_packs = ["gdpr"]` (or `["cdr-au"]`) in
+`~/.deectx/config.toml`. NER (semantic detection of people, addresses, health
+terms) is optional and requires a GLiNER ONNX model — see both files and
+[`ARCHITECTURE.md`](ARCHITECTURE.md) §5–6.
+
+Tool integration is turnkey for **Cursor** and **opencode** via the shipped
+shims — see [`shims/README.md`](shims/README.md). Any tool that lets you override
+its model base URL to the proxy works too (see “AI tool support” below).
 
 ## Verify it's working
 
@@ -168,15 +178,16 @@ curl -fsS http://127.0.0.1:8787/healthz   # → ok
 Send a prompt with a test email; check the audit:
 
 ```bash
-deectx audit --config config.toml --today --export report.json
+deectx audit --today --export report.json
 ```
 
 ---
 
 ## Configuration
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) §11 for the full field reference. The
-defaults work out of the box; the notable knobs are:
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) §11 for the full field reference. Config
+lives at `~/.deectx/config.toml` by default; the defaults work out of the box.
+The notable knobs are:
 
 | Setting | What it controls |
 |---------|------------------|
@@ -184,7 +195,7 @@ defaults work out of the box; the notable knobs are:
 | `active_packs` | Built-in PII packs to turn on (`default`(always) , `gdpr`, `cdr-au`). |
 | `ner` + `model_dir` | Optional semantic NER via a local GLiNER ONNX model. |
 | `allowlist` | Values never masked (case-insensitive). |
-| `ledger_path` / `ledger_retention_days` | Audit log location and retention. |
+| `ledger_path` / `ledger_retention_days` | Audit log location (default `~/.deectx/ledger.jsonl`) and retention. |
 
 ---
 
@@ -197,9 +208,12 @@ two supported request schemas:
 
 - **OpenAI-compatible** chat: `/v1/chat/completions` — including **streaming**
   (SSE) responses rehydrated in real time.
-- **Anthropic-compatible** messages: `/v1/messages`.
+- **Anthropic-compatible** messages: `/v1/messages` (and `/v1/messages/count_tokens`).
 - Concretely supported examples (shims included): **Cursor** and **opencode**,
   plus any LangChain/OpenAI SDK caller with a configurable `base_url`/`OPENAI_BASE_URL`.
+
+Endpoints deeCtx doesn't handle explicitly (e.g. `/v1/models`) are **forwarded
+verbatim**, so tools that call them keep working.
 
 ### Not supported (know the limits)
 
@@ -207,6 +221,10 @@ two supported request schemas:
   REST, Bedrock-native) **as-is** — they'd need a new request/response adapter.
 - **Non‑text / binary** outputs (images, blobs) are not rehydrated; they pass
   through as masked (they were masked before leaving your machine).
+- **Batch / legacy-completions / embeddings** requests forwarded via the
+  transparent fallback are currently passed **verbatim** (not masked) — their
+  asynchronous results can't be rehydrated by a stateless proxy. Prefer the
+  masked `/v1/chat/completions` and `/v1/messages` paths for sensitive prompts.
 - deeCtx is not a remote proxy or filtering firewall — it is specific to your
   local model traffic. Full guarantees and caveats: [`ARCHITECTURE.md`](ARCHITECTURE.md) §9 (threat model).
 
@@ -214,17 +232,27 @@ two supported request schemas:
 
 ## Commands
 
+Lifecycle (the guided surface — states are ACTIVE ⇄ OFF):
+
 ```bash
-deectx serve --config config.toml    # run the masking proxy
-deectx audit --config config.toml --today          # console summary
-deectx audit --config config.toml --today --export report.json   # JSON export
-deectx setup           # auto-wire installed tools + install autostart daemon
-deectx doctor          # check which tools are wired to the proxy
-deectx unwrap          # restore original tool configs from .bak backups
-deectx status [--json] # live counters from the running proxy's /stats
-deectx daemon-install  # start the proxy at login (autostart)
-deectx daemon-uninstall
+deectx                 # status dashboard (on/off, wired tools, warnings)
+deectx start           # turn ON: wire tools + install autostart + start masking
+deectx stop            # turn OFF: restore tools to direct API + stop the proxy
+deectx uninstall       # stop + restore tools; prompts to delete data (never removes the binary)
 ```
+
+Operate & inspect:
+
+```bash
+deectx serve                                  # run the proxy directly (uses ~/.deectx/config.toml)
+deectx audit --today                          # console summary of the hash-only ledger
+deectx audit --today --export report.json     # JSON export
+deectx status [--json]                        # live counters from the running proxy's /stats
+deectx doctor                                 # check which tools are wired
+```
+
+`setup` → alias of `start`, `unwrap` → alias of `stop`; `daemon-install` /
+`daemon-uninstall` manage the login autostart entry directly.
 
 ---
 
@@ -244,6 +272,12 @@ cargo clippy      # lint
 scripts/release.ps1  (Windows) / scripts/release.sh  → builds zip + computes SHA-256
 ```
 
+Building on Windows without the MSVC toolchain? Use the GNU toolchain + MSYS2
+mingw64: set `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=C:/msys64/mingw64/bin/gcc.exe`
+and `RUSTFLAGS="-C dlltool=C:/msys64/mingw64/bin/dlltool.exe"`, then
+`cargo +stable-x86_64-pc-windows-gnu test`. (CI's `windows-latest` has MSVC and
+needs none of this.)
+
 ---
 
 ## Troubleshooting
@@ -251,6 +285,27 @@ scripts/release.ps1  (Windows) / scripts/release.sh  → builds zip + computes S
 > **Fastest fix for any build error below:** don't build at all. `scoop install`
 > (Windows) or `cargo binstall deectx` (all platforms) download a prebuilt binary
 > and need no compiler or linker. See [Install](#install).
+
+### Runtime: `deectx setup` says "unrecognized subcommand", or "Prompt is too long" after wiring
+
+Both mean your **installed binary is older than your wiring**. `deectx setup`
+(now an alias of `start`) and the transparent proxy that fixes "Prompt is too
+long" ship in newer builds. Update to the latest release, then re-run:
+
+```powershell
+scoop update deectx      # or: cargo binstall deectx / brew upgrade deectx
+deectx start             # re-wires tools and replaces any stale proxy
+```
+
+A stale proxy from a previous version keeps running until `deectx start` (or a
+reboot) replaces it — `deectx start` stops the old one first.
+
+### Runtime: `deectx serve` fails with "address in use" (os error 10048)
+
+A proxy is already listening on `127.0.0.1:8787` — usually the autostart daemon
+`deectx start` installed. You don't need `deectx serve` when the daemon is
+running; check state with `deectx` (the dashboard). To take over the port,
+`deectx stop` first, or reconfigure `listen` in `~/.deectx/config.toml`.
 
 ### `cargo install deectx` fails on Windows with `link.exe not found`
 
@@ -343,24 +398,25 @@ scoop install deectx
 
 Update in place — same tool you installed with:
 
-| Installed with | Update | Uninstall |
-|----------------|--------|-----------|
+| Installed with | Update | Uninstall the binary |
+|----------------|--------|----------------------|
 | Scoop | `scoop update deectx` | `scoop uninstall deectx` |
 | cargo-binstall | `cargo binstall deectx` (re-run) | `cargo uninstall deectx` |
 | Cargo | `cargo install deectx` (re-run) | `cargo uninstall deectx` |
 | Homebrew | `brew upgrade deectx` | `brew uninstall deectx` |
 
-**Before removing the binary,** undo the machine-level wiring `deectx setup`
-created (safe to run even if you never ran `setup`):
+**To remove deeCtx cleanly, run `deectx uninstall` first** — it stops the proxy,
+restores every tool config from its `.bak` backup, removes the login autostart
+entry, and prompts before deleting your data:
 
 ```bash
-deectx unwrap            # restore every tool config from its .bak backup
-deectx daemon-uninstall  # remove the login autostart entry
+deectx uninstall          # unwire tools + stop + remove autostart; asks about data
 ```
 
-Then remove the binary with the uninstall command for your install path above.
-Config files you created (`config.toml`, `ledger.jsonl`) are never touched by
-uninstall — delete them by hand if you want them gone.
+Then remove the **binary** with the uninstall command for your install path
+above. Your config and ledger in `~/.deectx/` (`config.toml`, `ledger.jsonl`)
+are kept unless you answered "yes" to the delete prompt (or ran
+`deectx uninstall --purge`) — delete `~/.deectx/` by hand if you want them gone.
 
 ---
 
