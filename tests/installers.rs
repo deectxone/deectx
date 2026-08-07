@@ -18,7 +18,10 @@ fn release_artifacts_exist_and_are_valid() {
     let scoop = std::fs::read_to_string(root.join("install/scoop/deectx.json")).unwrap();
     let v: Value = serde_json::from_str(&scoop).expect("scoop manifest must be valid JSON");
     assert_eq!(v["bin"], "deectx.exe");
-    assert_eq!(v["version"], version, "scoop manifest must track the crate version");
+    assert_eq!(
+        v["version"], version,
+        "scoop manifest must track the crate version"
+    );
     let hash = v["architecture"]["64bit"]["hash"].as_str().unwrap();
     assert_eq!(
         hash.len(),
