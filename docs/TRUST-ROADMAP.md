@@ -29,10 +29,11 @@ These fill a security engineer's checklist for "is this binary safe to run?"
 | ☑ | **SECURITY.md + disclosure policy** | A defined way to report vulnerabilities | GitHub Security Advisories (CNA) — `SECURITY.md` | $0 |
 | ☑ | **OpenSSF Scorecard** | Automated repo security posture score | OpenSSF — `scorecard.yml` | $0 |
 | ☑ | **Dependency & vuln scanning** | No known-vulnerable deps ship | `rustsec/audit-check` in CI — `ci.yml` | $0 |
-| ☐ | **OpenSSF Best Practices Badge** | Self-certified secure-dev checklist, public badge | OpenSSF | $0 |
+| ☑ | **OpenSSF Best Practices Badge** | Self-certified secure-dev checklist, public badge — **PASSING** | OpenSSF — [project 13981](https://www.bestpractices.dev/projects/13981) | $0 |
 | ☐ | **Pin GitHub Actions by SHA** | CI supply chain can't be swapped under us | (repo hygiene) | $0 |
 | ☐ | **OSS-Fuzz enrollment** | Detector/regex chain is continuously fuzzed | Google OSS-Fuzz (free for OSS) | $0 |
 | ☐ | **Published golden-set benchmark** | Detection efficacy (false-negative rate) is measurable | own `tests/golden_set.rs`, versioned | $0 |
+| ☐ | **CHANGELOG + real release notes** | Users can judge upgrade impact (OpenSSF `release_notes`) | Keep a Changelog + `release.yml` wiring | $0 |
 | ☐ | **Threat-model whitepaper** | Honest limits & guarantees, promoted from ARCHITECTURE.md §9 | own doc, signed | $0 |
 | ☐ | **Reproducible builds** (stretch) | Anyone can rebuild the exact published binary | `--locked`, pinned toolchain | $0 |
 
@@ -108,10 +109,10 @@ Most enterprise reviews unblock on a **vendor packet**, not a single cert number
 
 ## Sequencing summary
 
-1. **Done (this change):** cosign + SLSA + SBOM in `release.yml`, `SECURITY.md`, Scorecard workflow, `cargo audit` in CI.
-2. **This month (free):** OpenSSF Best Practices Badge, pin actions by SHA, publish golden-set benchmark, OSS-Fuzz application, threat-model whitepaper.
+1. **Done:** cosign + SLSA + SBOM in `release.yml`, `SECURITY.md`, Scorecard workflow, `cargo audit` in CI, **OpenSSF Best Practices Badge (passing, project 13981)**.
+2. **This month (free):** pin actions by SHA, add CHANGELOG + wire real release notes, publish golden-set benchmark, OSS-Fuzz application, threat-model whitepaper.
 3. **Low budget:** code-signing cert + Apple notarization; public security whitepaper.
 4. **On first enterprise interest:** independent masking audit → pen test.
 5. **Selling deectx-pro:** SOC 2 Type II **or** ISO 27001 (+ ISO 42001); build Trust Center; answer CAIQ/VSA.
 
-*Last updated: 2026-08-06.*
+*Last updated: 2026-08-07.*

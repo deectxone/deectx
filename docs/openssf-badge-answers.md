@@ -1,9 +1,11 @@
 # OpenSSF Best Practices Badge — Answer Sheet (deeCtx)
 
-Paste-ready answers for the **passing** level at
-<https://www.bestpractices.dev/en/projects/new> (register the repo first).
-Each row: the criterion, our status, and the justification text to paste into
-that criterion's box. Criteria are **MUST** unless marked *(SHOULD)* /
+> ✅ **STATUS: PASSING** — [bestpractices.dev project 13981](https://www.bestpractices.dev/projects/13981).
+> Badge: `https://www.bestpractices.dev/projects/13981/badge`
+> This sheet is retained as the record of how each criterion was answered.
+
+Answers for the **passing** level. Each row: the criterion, our status, and the
+justification text. Criteria are **MUST** unless marked *(SHOULD)* /
 *(SUGGESTED)* — only MUSTs block the passing badge.
 
 Project URL: `https://github.com/deectxone/deectx`
@@ -14,11 +16,14 @@ Repo URL:    `https://github.com/deectxone/deectx`
 ## ✅ Passing-level status
 
 All passing-level **MUST** criteria are satisfied. `CONTRIBUTING.md` (the former
-blocker) now exists. Remaining optional hardening:
+blocker) exists. Remaining optional hardening:
 
 - *(Recommended, not required)* a standalone `CODE_OF_CONDUCT.md` — the code of
   conduct is currently a section inside CONTRIBUTING.md, which is sufficient for
   passing but is expected as its own file at the silver/gold levels.
+- `release_notes` is currently answered on the strength of GitHub Releases; to
+  make it durable, add a CHANGELOG and wire real per-tag notes (see
+  docs/TRUST-ROADMAP.md Phase 0).
 
 ---
 
@@ -51,21 +56,21 @@ blocker) now exists. Remaining optional hardening:
 | `version_unique` | ☑ MET | Unique versions via Cargo.toml `version` + `v*` git tags + crates.io. |
 | `version_semver` *(SUGGESTED)* | ☑ MET | Semantic Versioning (currently 0.1.0, pre-1.0). |
 | `version_tags` *(SUGGESTED)* | ☑ MET | Releases are tagged `v*`; release.yml triggers on those tags. |
-| `release_notes` | ☑ MET | GitHub Releases carry per-tag notes; binaries, signatures, and SBOM attached. |
+| `release_notes` | ☑ MET | GitHub Releases carry per-tag notes; binaries, signatures, and SBOM attached. (Hardening: add CHANGELOG + wire notes — roadmap Phase 0.) |
 | `release_notes_vulns` *(SUGGESTED)* | ☑ MET | No vulnerabilities fixed to date; when one is, its release notes will identify it. Disclosure policy in SECURITY.md. |
 
 ## Reporting
 
 | Criterion | Status | Justification to paste |
 |-----------|--------|------------------------|
-| `report_process` | ☑ MET | Bugs via GitHub Issues; security via SECURITY.md. |
-| `report_tracker` | ☑ MET | GitHub Issues. |
-| `report_responses` | ☑ MET | Maintainers triage issues/PRs on the public tracker. |
-| `enhancement_responses` *(SHOULD)* | ☑ MET | Feature requests handled as GitHub Issues. |
-| `report_archive` | ☑ MET | Issue/PR history is publicly archived on GitHub. |
+| `report_process` | ☑ MET | Bugs via GitHub Issues (referenced from CONTRIBUTING.md); security via SECURITY.md. |
+| `report_tracker` *(SHOULD)* | ☑ MET | GitHub Issues tracks individual reports. |
+| `report_responses` | ☑ MET | Maintainers triage issues/PRs on the public tracker; no unaddressed reports in the window. |
+| `enhancement_responses` *(SHOULD)* | ☑ MET | Feature requests handled as GitHub Issues; none unaddressed in the window. |
+| `report_archive` | ☑ MET | Issue/PR history is publicly archived + searchable on GitHub. |
 | `vulnerability_report_process` | ☑ MET | SECURITY.md defines the process (GitHub Security Advisories + security@deectx.dev). |
 | `vulnerability_report_private` | ☑ MET | Private reporting via GitHub Security Advisories; PGP available on request. |
-| `vulnerability_report_response` *(SHOULD)* | ☑ MET | SECURITY.md commits to acknowledgement within 3 business days. |
+| `vulnerability_report_response` *(SHOULD)* | ☑ MET | SECURITY.md commits to acknowledgement within 3 business days (≤14-day requirement); none received to date. |
 
 ## Quality
 
@@ -90,20 +95,20 @@ blocker) now exists. Remaining optional hardening:
 | Criterion | Status | Justification to paste |
 |-----------|--------|------------------------|
 | `know_secure_design` | ☑ MET | ARCHITECTURE.md §9 documents the threat model; design is fail-closed (503 when a required detector is unavailable) and local-first (no data egress). |
-| `know_common_errors` | ☑ MET | Written in safe Rust (memory-safe); detection uses checksums (Luhn/Mod97/ATO-TFN) + entropy gating to reduce false negatives/positives. |
-| `crypto_published` *(N/A allowed)* | ☑ MET | No proprietary cryptography. Uses SHA-256 (ledger hashing) and standard TLS via the Rust HTTP stack; release signing uses Sigstore. |
+| `know_common_errors` | ☑ MET | Written in safe Rust (memory-safe); detection uses checksums (Luhn/Mod97/ATO-TFN) + entropy gating; `cargo audit` counters vulnerable deps. |
+| `crypto_published` | ☑ MET | No proprietary cryptography. SHA-256 (ledger hashing) + standard TLS via the Rust HTTP stack; release signing uses Sigstore. |
 | `crypto_call` | ☑ MET | Crypto via established libraries, not hand-rolled. |
 | `crypto_floss` | ☑ MET | All crypto dependencies are FLOSS. |
-| `crypto_keylength` | ☑ MET | SHA-256; TLS to upstream uses modern cipher suites. |
-| `crypto_working` | ☑ MET | No known-broken algorithms (no MD5/SHA-1 for security). |
-| `crypto_weaknesses` *(SHOULD)* | ☑ MET | Uses SHA-256, not MD5/SHA-1. |
-| `crypto_pfs` *(SHOULD)* | ☑ MET | TLS to the upstream API supports forward secrecy (provided by the Rust TLS stack). |
+| `crypto_keylength` | ☑ MET | SHA-256; TLS uses modern key sizes. No config exposes weaker keylengths. |
+| `crypto_working` | ☑ MET | No known-broken algorithms (no MD5/SHA-1/DES/RC4). |
+| `crypto_weaknesses` *(SHOULD)* | ☑ MET | Uses SHA-256, not SHA-1; modern TLS. |
+| `crypto_pfs` *(SHOULD)* | ☑ MET | Outbound TLS to upstream uses ECDHE (PFS); deeCtx implements no key-agreement of its own. |
 | `crypto_password_storage` | ☑ N/A | deeCtx stores no user passwords. |
-| `crypto_random` | ☑ N/A | Masking placeholders are sequential per-session identifiers, not security tokens; no security-sensitive randomness generated. |
-| `delivery_mitm` | ☑ MET | Releases delivered over HTTPS with SHA-256 checksums, Sigstore signatures, and SLSA provenance (release.yml). |
-| `delivery_unsigned` | ☑ MET | Release artifacts are Sigstore-signed (`.cosign.bundle`) + carry SLSA provenance attestations. |
+| `crypto_random` | ☑ N/A | No cryptographic keys/nonces generated; placeholders are sequential per-session identifiers. |
+| `delivery_mitm` | ☑ MET | HTTPS-only distribution (GitHub, crates.io, brew/scoop `https://` URLs) + Sigstore signatures + SLSA provenance. |
+| `delivery_unsigned` | ☑ MET | Release archives are Sigstore-signed (`.cosign.bundle`) + SLSA provenance; manifest hashes fetched over HTTPS. |
 | `vulnerabilities_fixed_60_days` | ☑ MET | No publicly known unpatched vulnerabilities. |
-| `vulnerabilities_critical_fixed` *(SHOULD)* | ☑ MET | None outstanding. |
+| `vulnerabilities_critical_fixed` *(SHOULD)* | ☑ MET | None outstanding; SECURITY.md commits to rapid remediation. |
 | `no_leaked_credentials` | ☑ MET | No credentials in the repo; the ledger stores hashes only (never raw PII/secrets). |
 
 ## Analysis
@@ -120,11 +125,11 @@ blocker) now exists. Remaining optional hardening:
 
 ---
 
-## After you submit
+## Maintaining the badge
 
 - The badge auto-detects some criteria from the repo; the rest use the text above.
-- Add the earned badge to README next to the existing crates.io/license badges:
-  `[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/<ID>/badge)](https://www.bestpractices.dev/en/projects/<ID>)`
-- Then update `docs/TRUST-ROADMAP.md`: flip **OpenSSF Best Practices Badge** to ☑.
+- Badge embedded in README:
+  `[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13981/badge)](https://www.bestpractices.dev/projects/13981)`
+- Re-review the answers whenever release/CI or the disclosure process changes.
 
-*Last updated: 2026-08-06.*
+*Last updated: 2026-08-07.*
