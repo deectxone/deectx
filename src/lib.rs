@@ -3,6 +3,7 @@ pub mod audit;
 pub mod chunk;
 pub mod config;
 pub mod detect;
+pub mod home;
 pub mod ledger;
 pub mod masker;
 pub mod packs;
