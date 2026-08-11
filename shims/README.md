@@ -22,3 +22,8 @@ blocks the action whenever the proxy is unreachable.
 2. Copy `shims/opencode/deectx-plugin.ts` to `~/.config/opencode/plugins/deectx-plugin.ts`.
    The plugin injects `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` into tool environments
    and blocks tool execution when the proxy is unreachable.
+
+`deectx stop`/`deectx uninstall` remove this plugin file automatically (it's the one
+thing here they track that isn't covered by `patch_config`'s `.bak` restore) — you
+still need to fully restart opencode afterward, since a plugin already loaded into a
+running session stays active in memory until that session ends.

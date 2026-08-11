@@ -228,13 +228,38 @@ pub fn doctor() -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-/// Restore original configs from their `.bak` backups. Attempts every
-/// discovered tool even if one fails (e.g. a config file held open by a
-/// running editor or a locked OneDrive-synced path), so one stuck tool never
-/// prevents the others from being restored. Returns the tools that failed to
-/// restore so the caller can warn the user — leaving a tool silently wired to
-/// a proxy that's about to stop means every request it makes next fails with
-/// connection-refused.
+/// Paths a tool may carry beyond its patched config file — installed by hand
+/// per `shims/README.md`, so `patch_config`'s `.bak` mechanism never sees
+/// them and can't restore-away their effect. Currently just opencode's
+/// fail-closed plugin: it hooks `tool.execute.before` and throws on *every*
+/// tool call once the proxy it's guarding stops responding, so leaving it in
+/// place after `stop`/`uninstall` turns "restore direct access" into "opencode
+/// is now unusable until you find and delete this file by hand." `unwrap()`
+/// removes it unconditionally when present — the path is deeCtx-specific, so
+/// there's nothing else it could be.
+fn extra_artifacts(tool: Tool) -> Vec<PathBuf> {
+    match tool {
+        Tool::Opencode => home_dir()
+            .map(|h| {
+                vec![h
+                    .join(".config")
+                    .join("opencode")
+                    .join("plugins")
+                    .join("deectx-plugin.ts")]
+            })
+            .unwrap_or_default(),
+        Tool::ClaudeCode | Tool::Codex => Vec::new(),
+    }
+}
+
+/// Restore original configs from their `.bak` backups and remove any
+/// [`extra_artifacts`]. Attempts every discovered tool even if one fails
+/// (e.g. a config file held open by a running editor or a locked
+/// OneDrive-synced path), so one stuck tool never prevents the others from
+/// being restored. Returns the tools that failed to restore so the caller
+/// can warn the user — leaving a tool silently wired to a proxy that's about
+/// to stop means every request it makes next fails with connection-refused
+/// (or, for opencode's plugin, fails closed outright).
 pub fn unwrap() -> Vec<(Tool, anyhow::Error)> {
     let mut failures = Vec::new();
     for (tool, path) in discover() {
@@ -242,6 +267,15 @@ pub fn unwrap() -> Vec<(Tool, anyhow::Error)> {
         if backup.exists() {
             if let Err(e) = std::fs::rename(&backup, &path) {
                 failures.push((tool, anyhow::Error::from(e)));
+            }
+        }
+    }
+    for tool in [Tool::ClaudeCode, Tool::Codex, Tool::Opencode] {
+        for artifact in extra_artifacts(tool) {
+            if artifact.exists() {
+                if let Err(e) = std::fs::remove_file(&artifact) {
+                    failures.push((tool, anyhow::Error::from(e)));
+                }
             }
         }
     }
@@ -729,6 +763,45 @@ mod tests {
             std::fs::read_to_string(&opencode_path).unwrap(),
             "{\"original\":true}",
             "opencode must still be restored despite ClaudeCode's failure"
+        );
+
+        std::env::remove_var("USERPROFILE");
+        std::env::remove_var("HOME");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression test: opencode's fail-closed plugin
+    /// (`shims/opencode/deectx-plugin.ts`, installed by hand per
+    /// `shims/README.md`) hooks `tool.execute.before` and throws on every
+    /// tool call once the proxy stops responding. Before this fix, `unwrap()`
+    /// only knew about `patch_config`'s `.bak` files, so `deectx stop`/
+    /// `uninstall` left the plugin in place and turned "restore direct
+    /// access" into "opencode refuses every action until you find and delete
+    /// this file by hand."
+    #[test]
+    fn unwrap_removes_opencode_fail_closed_plugin() {
+        let _g = crate::home::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let dir = temp_dir("opencode_plugin_shim");
+        std::env::set_var("USERPROFILE", &dir);
+        std::env::set_var("HOME", &dir);
+
+        let opencode_dir = dir.join(".config").join("opencode");
+        std::fs::create_dir_all(&opencode_dir).unwrap();
+        std::fs::write(opencode_dir.join("opencode.json"), "{}").unwrap();
+
+        let plugins_dir = opencode_dir.join("plugins");
+        std::fs::create_dir_all(&plugins_dir).unwrap();
+        let plugin_path = plugins_dir.join("deectx-plugin.ts");
+        std::fs::write(&plugin_path, "export default {};").unwrap();
+
+        let failures = unwrap();
+
+        assert!(failures.is_empty(), "cleanup should not fail: {failures:?}");
+        assert!(
+            !plugin_path.exists(),
+            "stop/uninstall must remove the fail-closed plugin, not just restore opencode.json"
         );
 
         std::env::remove_var("USERPROFILE");

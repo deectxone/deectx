@@ -148,7 +148,12 @@ proxy + removes autostart; `uninstall` = stop + optional data delete. `stop`/`un
 `Vec<String>` restore warnings (never silently swallowed) so `deectx stop` tells you when a tool
 config couldn't be restored instead of claiming success. `setup.rs` still owns the low-level tool
 `discover`/`patch_config`/`unwrap` (which now attempts every tool even if one fails, returning
-`Vec<(Tool, Error)>`) and the per-OS daemon artifacts.
+`Vec<(Tool, Error)>`) and the per-OS daemon artifacts. `unwrap` also removes each tool's
+`extra_artifacts` — currently opencode's fail-closed plugin (`shims/opencode/deectx-plugin.ts`,
+hand-installed per `shims/README.md`) — since those live outside `patch_config`'s `.bak` tracking
+entirely; leaving that plugin behind after `stop` turns "restore direct access" into "opencode
+throws on every tool call." A session that already loaded the plugin still needs a restart —
+that part can't be fixed from the filesystem side.
 
 ## Conventions
 - Rust 2021, `anyhow` for errors, serde derive, chrono UTC. Tests live next to code
