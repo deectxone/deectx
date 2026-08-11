@@ -1,7 +1,7 @@
 class Deectx < Formula
   desc "Local-first PII-masking proxy for AI coding tools"
   homepage "https://github.com/deectxone/deectx"
-  version "0.2.1"
+  version "0.2.2"
   license "Apache-2.0"
 
   # Installs the prebuilt release binary — no Rust toolchain or C/C++ linker

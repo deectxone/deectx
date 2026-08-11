@@ -1,6 +1,6 @@
 [package]
 name = "deectx"
-version = "0.2.0"
+version = "0.2.2"
 description = "Local-first PII-masking reverse proxy for AI coding tools"
 license = "Apache-2.0"
 repository = "https://github.com/deectxone/deectx"
