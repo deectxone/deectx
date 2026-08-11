@@ -66,7 +66,8 @@ Install paths ship prebuilt binaries first (Scoop / `cargo binstall` / prebuilt 
 | `src/lifecycle.rs` | `start`/`stop`/`uninstall`/`status` + `StatusReport`/`render_status`; `ProcessManager` trait (+ `OsProcessManager`) |
 | `src/home.rs` | Runtime home `~/.deectx/` (config/ledger/pidfile paths) + `Pidfile` |
 | `src/config.rs` | `Config` struct + TOML loading, serde defaults |
-| `src/proxy.rs` | axum routes, transparent fallback, masking walk, method-agnostic forward, rehydration |
+| `src/proxy.rs` | axum routes, transparent fallback, masking walk, method-agnostic forward, rehydration, local dashboard (`GET /`, `/dashboard`, `/audit/today`) |
+| `src/dashboard.html` | Self-contained branded HTML/CSS/JS for the local dashboard; embedded via `include_str!`, polls `/stats` + `/audit/today` |
 | `src/upstream.rs` | Upstream routing by API-key shape (`sk-ant-…` → Anthropic, `sk-…` → OpenAI) |
 | `src/responses_ws.rs` | `/v1/responses` WebSocket proxy (Codex / Copilot CLI) — masked + rehydrated per frame |
 | `src/sse.rs` | Streaming SSE rehydration (bounded buffers) |
@@ -118,29 +119,50 @@ outbound to the model but rehydrated to the local tool.**
 Append-only JSONL, daily rotation to `ledger-YYYY-MM-DD.jsonl`, prune after retention days.
 Stores only hashes — never raw PII. `LedgerEvent{entity, placeholder, ph_hash, action, alert}`;
 `LedgerEntry{ ts, tool, session, events, latency_ms, packs }`. `tool` = user-agent; `session` =
-`"s_"+sha256(first_msg)[..8]`.
+`"s_"+sha256(first_msg)[..8]`. `Ledger::path()` exposes the base path so callers (dashboard,
+`audit --today`) can re-read today's entries without duplicating it.
 
 ### Proxy (`src/proxy.rs`, `src/upstream.rs`, `src/responses_ws.rs`)
-Routes: `GET /healthz`, `GET /stats`, `POST /v1/chat/completions` (OpenAI), `POST /v1/messages`
-(Anthropic), the `/v1/responses` WebSocket, and a **catch-all `fallback`** (`handle_passthrough`)
-for everything else. `passthrough_should_mask` masks prompt-bearing endpoints
-(`/v1/messages/count_tokens`) via the same `mask_walk`; other paths (`/v1/models`, …) forward
-verbatim. Completions and passthrough share the method-agnostic `forward`. Streams via
-`SseRehydrator`; non-streams rehydrated via `rehydrate_response`; WS frames per frame.
+Routes: `GET /healthz`, `GET /stats`, `GET /audit/today` (today's hash-only `AuditSummary` as
+JSON), `GET /` + `GET /dashboard` (local dashboard, `src/dashboard.html`), `POST
+/v1/chat/completions` (OpenAI), `POST /v1/messages` (Anthropic), the `/v1/responses` WebSocket,
+and a **catch-all `fallback`** (`handle_passthrough`) for everything else. `/stats`,
+`/audit/today`, and the dashboard are only mounted when `stats_enabled`.
+`passthrough_should_mask` masks prompt-bearing endpoints (`/v1/messages/count_tokens`) via the
+same `mask_walk`; other paths (`/v1/models`, …) forward verbatim. Completions and passthrough
+share the method-agnostic `forward`. Streams via `SseRehydrator`; non-streams rehydrated via
+`rehydrate_response`; WS frames per frame.
+
+`mask_walk` skips `tool_use_id`/`tool_call_id`/`call_id`, and bare `id` when the enclosing object
+is a `tool_use`/`tool_result`/`function` block (`is_protocol_id_field`) — these are high-entropy
+protocol ids the secrets detector would otherwise flag as an `api_key` and mask, corrupting the id
+and breaking the upstream schema. `mask_or_forward_unmasked` wraps `mask_walk` + serialization in
+`catch_unwind`: any panic or serialize failure forwards the original body unmasked (never blocks
+or corrupts the request) and increments `stats.errors`, surfaced in `/stats`, `deectx status`, and
+the dashboard.
 
 ### Lifecycle & autostart (`src/lifecycle.rs`, `src/setup.rs`)
 `lifecycle::start` (idempotent) stops any running/stale proxy (via `deectx.pid` + `ProcessManager`),
 wires tools, installs the login autostart, and spawns `serve`; `stop` unwraps tools + kills the
-proxy + removes autostart; `uninstall` = stop + optional data delete. `setup.rs` still owns the
-low-level tool `discover`/`patch_config`/`unwrap` and the per-OS daemon artifacts.
+proxy + removes autostart; `uninstall` = stop + optional data delete. `stop`/`uninstall` return
+`Vec<String>` restore warnings (never silently swallowed) so `deectx stop` tells you when a tool
+config couldn't be restored instead of claiming success. `setup.rs` still owns the low-level tool
+`discover`/`patch_config`/`unwrap` (which now attempts every tool even if one fails, returning
+`Vec<(Tool, Error)>`) and the per-OS daemon artifacts.
 
 ## Conventions
 - Rust 2021, `anyhow` for errors, serde derive, chrono UTC. Tests live next to code
   (and in `tests/`); TDD. `cargo fmt` + `clippy -D warnings` must be clean.
 - No env-var config (TOML only); `DEECTX_HOME` is the sole path override. No raw PII written
-  anywhere; hashes only.
+  anywhere; hashes only — this extends to the dashboard, which shows entity types/counts, never
+  masked values.
 - Match existing module boundaries — add features as new focused `src/` files, exported from
   `lib.rs`, never pile into `proxy.rs`.
+- Masking must fail open, never closed, on an internal bug (panic/serialize error): forward the
+  request unmasked and record it to `stats.errors` rather than corrupting the request or dropping
+  the connection. This is distinct from the deliberate `fail_closed` config gate (503 when a
+  required detector like NER is unavailable), which is an intentional, opt-in compliance control
+  and must keep blocking.
 
 ## Where to make a change
 - New scanner type → add to `src/detect/` + wire into `detect/mod.rs` chain.

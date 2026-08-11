@@ -228,15 +228,24 @@ pub fn doctor() -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-/// Restore original configs from their `.bak` backups.
-pub fn unwrap() -> Result<()> {
-    for (_tool, path) in discover() {
+/// Restore original configs from their `.bak` backups. Attempts every
+/// discovered tool even if one fails (e.g. a config file held open by a
+/// running editor or a locked OneDrive-synced path), so one stuck tool never
+/// prevents the others from being restored. Returns the tools that failed to
+/// restore so the caller can warn the user — leaving a tool silently wired to
+/// a proxy that's about to stop means every request it makes next fails with
+/// connection-refused.
+pub fn unwrap() -> Vec<(Tool, anyhow::Error)> {
+    let mut failures = Vec::new();
+    for (tool, path) in discover() {
         let backup = PathBuf::from(format!("{}.bak", path.display()));
         if backup.exists() {
-            std::fs::rename(&backup, &path)?;
+            if let Err(e) = std::fs::rename(&backup, &path) {
+                failures.push((tool, anyhow::Error::from(e)));
+            }
         }
     }
-    Ok(())
+    failures
 }
 
 /// Windows startup-folder batch file content: runs `<exe> serve` at login.
@@ -675,6 +684,56 @@ mod tests {
         uninstall_at(&path).unwrap();
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Regression test: `unwrap()` used to `?`-propagate the first rename
+    /// failure, silently skipping every tool that came after it in
+    /// `discover()`'s order. That left tools wired to a proxy that `stop`
+    /// believed it had already torn down. It must now attempt every tool and
+    /// report which ones failed instead of aborting.
+    #[test]
+    fn unwrap_continues_after_one_tool_fails_to_restore() {
+        let _g = crate::home::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let dir = temp_dir("unwrap_partial");
+        std::env::set_var("USERPROFILE", &dir);
+        std::env::set_var("HOME", &dir);
+
+        // ClaudeCode: settings.json exists as a directory, not a file, so
+        // renaming its `.bak` onto it is guaranteed to fail on every OS.
+        let claude_settings = dir.join(".claude").join("settings.json");
+        std::fs::create_dir_all(&claude_settings).unwrap();
+        std::fs::write(format!("{}.bak", claude_settings.display()), "{}").unwrap();
+
+        // Opencode: an ordinary patched file that should restore cleanly.
+        let opencode_dir = dir.join(".config").join("opencode");
+        std::fs::create_dir_all(&opencode_dir).unwrap();
+        let opencode_path = opencode_dir.join("opencode.json");
+        std::fs::write(&opencode_path, "{\"patched\":true}").unwrap();
+        std::fs::write(
+            format!("{}.bak", opencode_path.display()),
+            "{\"original\":true}",
+        )
+        .unwrap();
+
+        let failures = unwrap();
+
+        assert_eq!(
+            failures.len(),
+            1,
+            "only the ClaudeCode restore should fail: {failures:?}"
+        );
+        assert_eq!(failures[0].0, Tool::ClaudeCode);
+        assert_eq!(
+            std::fs::read_to_string(&opencode_path).unwrap(),
+            "{\"original\":true}",
+            "opencode must still be restored despite ClaudeCode's failure"
+        );
+
+        std::env::remove_var("USERPROFILE");
+        std::env::remove_var("HOME");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

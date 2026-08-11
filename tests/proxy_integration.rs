@@ -316,6 +316,122 @@ async fn masks_anthropic_tool_use_input() {
     );
 }
 
+/// Regression test: Anthropic tool_use/tool_result ids are long, high-entropy
+/// tokens (e.g. `toolu_01A9kF2mQ8vLp3nR7sW1yZ4bN6`) that the secrets entropy
+/// detector would otherwise flag as an api_key and mask into
+/// `[REDACTED_SECRET]`/`[API_KEY_N]` — which breaks Anthropic's
+/// `^[a-zA-Z0-9_-]+$` id schema and the API rejects the request with a 400.
+/// These fields must pass through byte-for-byte.
+#[tokio::test]
+async fn anthropic_tool_use_id_survives_masking() {
+    let (up_addr, seen) = mock_upstream_anthropic().await;
+    let ledger_path =
+        std::env::temp_dir().join(format!("deectx_tool_id_an_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream: format!("http://{up_addr}"),
+        ledger_path,
+        upstream_anthropic: Some(format!("http://{up_addr}")),
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    let tool_use_id = "toolu_01A9kF2mQ8vLp3nR7sW1yZ4bN6";
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{local}/v1/messages"))
+        .header("x-api-key", "test-key")
+        .header("anthropic-version", "2023-06-01")
+        .json(&json!({
+            "model": "claude-3-7-sonnet",
+            "max_tokens": 64,
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": tool_use_id, "name": "send_report", "input": {"email": "jane.doe@example.com"}}
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": tool_use_id, "content": "sent"}
+                    ]
+                }
+            ]
+        }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let upstream = seen.lock().unwrap().clone();
+    assert!(
+        upstream.contains(&format!("\"id\":\"{tool_use_id}\"")),
+        "tool_use.id must survive masking unchanged: {upstream}"
+    );
+    assert!(
+        upstream.contains(&format!("\"tool_use_id\":\"{tool_use_id}\"")),
+        "tool_result.tool_use_id must survive masking unchanged: {upstream}"
+    );
+    assert!(
+        upstream.contains("[EMAIL_1]"),
+        "the email inside tool_use.input must still be masked: {upstream}"
+    );
+}
+
+/// Same regression as `anthropic_tool_use_id_survives_masking` but for
+/// OpenAI-shaped `tool_calls[].id` / `tool_call_id`.
+#[tokio::test]
+async fn openai_tool_call_id_survives_masking() {
+    let (upstream_addr, received) = mock_upstream();
+    let ledger_path =
+        std::env::temp_dir().join(format!("deectx_tool_id_oai_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        upstream: upstream_addr.clone(),
+        ledger_path,
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(deectx::proxy::serve_with_listener(cfg, listener));
+
+    let call_id = "call_01A9kF2mQ8vLp3nR7sW1yZ4bN6";
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", port))
+        .json(&json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": "send the report"},
+                {"role": "assistant", "content": null, "tool_calls": [{"id": call_id, "type": "function", "function": {"name":"send_report","arguments":"{\"email\":\"jane.doe@example.com\"}"}}]},
+                {"role": "tool", "tool_call_id": call_id, "content": "sent"}
+            ]
+        }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let upstream_body = received.lock().unwrap().clone();
+    assert!(
+        upstream_body.contains(&format!("\"id\":\"{call_id}\"")),
+        "tool_calls[].id must survive masking unchanged: {upstream_body}"
+    );
+    assert!(
+        upstream_body.contains(&format!("\"tool_call_id\":\"{call_id}\"")),
+        "tool_call_id must survive masking unchanged: {upstream_body}"
+    );
+    assert!(
+        upstream_body.contains("[EMAIL_1]"),
+        "the email inside the tool arguments must still be masked: {upstream_body}"
+    );
+}
+
 #[tokio::test]
 async fn streams_sse_with_split_placeholder_rehydrated() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

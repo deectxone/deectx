@@ -124,23 +124,34 @@ pub fn start<P: ProcessManager>(pm: &P) -> anyhow::Result<StatusReport> {
 }
 
 /// Turn deeCtx OFF: restore tool configs (direct to API), stop the proxy, and
-/// remove the login autostart so it stays off until `start`.
-pub fn stop<P: ProcessManager>(pm: &P) -> anyhow::Result<()> {
-    let _ = crate::setup::unwrap();
+/// remove the login autostart so it stays off until `start`. Returns a
+/// warning per tool whose config could not be restored (e.g. a locked file) —
+/// callers must surface these rather than claiming a clean stop, since a
+/// still-wired tool will fail every request against the now-dead proxy.
+pub fn stop<P: ProcessManager>(pm: &P) -> anyhow::Result<Vec<String>> {
+    let warnings = crate::setup::unwrap()
+        .into_iter()
+        .map(|(tool, e)| {
+            format!(
+                "{tool:?} config could not be restored ({e}) — it may still point at \
+                 the proxy; close/restart {tool:?} after fixing this"
+            )
+        })
+        .collect();
     stop_running_proxy(pm);
     let _ = crate::setup::uninstall_daemon();
-    Ok(())
+    Ok(warnings)
 }
 
 /// Full teardown: stop, then optionally delete config + ledger. Never removes
-/// the binary.
-pub fn uninstall<P: ProcessManager>(pm: &P, delete_data: bool) -> anyhow::Result<()> {
-    stop(pm)?;
+/// the binary. Propagates any restore warnings from `stop`.
+pub fn uninstall<P: ProcessManager>(pm: &P, delete_data: bool) -> anyhow::Result<Vec<String>> {
+    let warnings = stop(pm)?;
     if delete_data {
         let _ = std::fs::remove_file(crate::home::config_path());
         let _ = std::fs::remove_file(crate::home::ledger_path());
     }
-    Ok(())
+    Ok(warnings)
 }
 
 /// Build the current status snapshot from the pidfile, process liveness, tool

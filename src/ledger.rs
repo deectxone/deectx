@@ -33,6 +33,13 @@ pub struct Ledger {
 }
 
 impl Ledger {
+    /// The base ledger path this instance was opened with — lets callers (the
+    /// dashboard, `audit --today`) re-read today's entries without duplicating
+    /// the path elsewhere.
+    pub fn path(&self) -> &Path {
+        &self.base
+    }
+
     pub fn new(path: PathBuf, retention_days: u64) -> io::Result<Self> {
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         let ledger = Self {

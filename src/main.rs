@@ -82,8 +82,15 @@ async fn main() -> Result<()> {
             println!("{}", deectx::lifecycle::render_status(&report));
         }
         Some(Cmd::Stop) | Some(Cmd::Unwrap) => {
-            deectx::lifecycle::stop(&pm)?;
-            println!("deeCtx stopped; tools restored to direct API access.");
+            let warnings = deectx::lifecycle::stop(&pm)?;
+            if warnings.is_empty() {
+                println!("deeCtx stopped; tools restored to direct API access.");
+            } else {
+                println!("deeCtx stopped, but some tools were NOT restored:");
+                for w in &warnings {
+                    println!("  ⚠ {w}");
+                }
+            }
         }
         Some(Cmd::Uninstall { purge }) => {
             let delete = purge || {
@@ -94,7 +101,10 @@ async fn main() -> Result<()> {
                 std::io::stdin().read_line(&mut line).ok();
                 matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
             };
-            deectx::lifecycle::uninstall(&pm, delete)?;
+            let warnings = deectx::lifecycle::uninstall(&pm, delete)?;
+            for w in &warnings {
+                println!("  ⚠ {w}");
+            }
             println!(
                 "deeCtx removed. To remove the binary: `scoop uninstall deectx` (or brew/cargo)."
             );

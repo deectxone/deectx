@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deeCtx — local dashboard</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='10' fill='%2312744f'/%3E%3Cg stroke='%23f5f4ef' stroke-width='4.4' stroke-linecap='round' stroke-linejoin='round' fill='none'%3E%3Cpath d='M15 11v26'/%3E%3Cpath d='M15 11c14 0 22 6.5 22 13s-8 13-22 13'/%3E%3Cline x1='34' y1='35.5' x2='41.5' y2='35.5'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+  :root {
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    --color-bg: #f5f4ef;
+    --color-bg-soft: #ecebe4;
+    --color-panel: #fbfaf6;
+    --color-panel-border: #ddddd2;
+    --color-ink: #14171a;
+    --color-ink-dim: #4b5049;
+    --color-ink-faint: #83887e;
+    --color-accent: #12744f;
+    --color-accent-soft: #e2ede6;
+    --color-accent2: #2f7d6b;
+    --color-warn: #b3781c;
+    --color-danger: #b3403a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-bg: #14171a;
+      --color-bg-soft: #1b1f22;
+      --color-panel: #1e2225;
+      --color-panel-border: #30353a;
+      --color-ink: #f2f1ec;
+      --color-ink-dim: #b7bcb2;
+      --color-ink-faint: #7c8279;
+      --color-accent: #35c48c;
+      --color-accent-soft: #16332a;
+      --color-accent2: #4fae95;
+      --color-warn: #d99a3d;
+      --color-danger: #dd6b63;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  a { color: var(--color-accent); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 20px 56px; }
+
+  header.top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--color-panel-border);
+    padding-bottom: 16px; margin-bottom: 24px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .mark {
+    width: 34px; height: 34px; border-radius: 8px;
+    background: var(--color-accent-soft); color: var(--color-accent);
+    display: flex; align-items: center; justify-content: center; flex: none;
+  }
+  .brand .name-block { line-height: 1.1; }
+  .brand .wordmark {
+    font-family: var(--font-mono); font-weight: 800; font-size: 20px;
+    color: var(--color-accent); letter-spacing: -0.01em;
+  }
+  .brand .tagline {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--color-ink-faint); margin-top: 2px;
+  }
+  .header-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .site-link {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 12px; color: var(--color-ink-dim); text-decoration: none;
+  }
+  .site-link:hover { color: var(--color-ink); }
+  .gh-star {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 600; color: var(--color-accent);
+    background: var(--color-accent-soft); border-radius: 999px;
+    padding: 6px 12px; text-decoration: none; transition: filter 0.15s ease;
+  }
+  .gh-star:hover { filter: brightness(0.95); }
+  .status-pill {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--color-ink-dim);
+    background: var(--color-panel); border: 1px solid var(--color-panel-border);
+    padding: 6px 12px; border-radius: 999px;
+  }
+  .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--color-accent);
+    box-shadow: 0 0 0 0 rgba(18,116,79,0.6);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(18,116,79,0.45); }
+    70% { box-shadow: 0 0 0 6px rgba(18,116,79,0); }
+    100% { box-shadow: 0 0 0 0 rgba(18,116,79,0); }
+  }
+
+  #err-banner {
+    display: none;
+    background: color-mix(in srgb, var(--color-danger) 12%, var(--color-panel));
+    border: 1px solid var(--color-danger);
+    color: var(--color-danger);
+    padding: 10px 14px; border-radius: 10px; font-size: 13px;
+    margin-bottom: 20px;
+  }
+
+  .hero {
+    display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px;
+    margin-bottom: 22px;
+  }
+  @media (max-width: 720px) { .hero { grid-template-columns: 1fr; } }
+
+  .hero-card {
+    background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent2) 100%);
+    color: #f5f4ef; border-radius: 16px; padding: 22px 24px;
+    display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  }
+  .hero-card .big {
+    font-family: var(--font-mono); font-size: 42px; font-weight: 800; line-height: 1;
+  }
+  .hero-card .label { font-size: 13px; opacity: 0.92; }
+  .hero-card .sub { font-size: 12px; opacity: 0.75; margin-top: 6px; }
+
+  .hero-meta {
+    background: var(--color-panel); border: 1px solid var(--color-panel-border);
+    border-radius: 16px; padding: 18px 20px; font-size: 13px; color: var(--color-ink-dim);
+    display: flex; flex-direction: column; justify-content: center; gap: 8px;
+  }
+  .hero-meta strong { color: var(--color-ink); }
+
+  section { margin-bottom: 28px; }
+  h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--color-ink-faint); margin: 0 0 10px;
+  }
+
+  .kpis {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
+  }
+  @media (max-width: 860px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+  .kpi {
+    background: var(--color-panel); border: 1px solid var(--color-panel-border);
+    border-radius: 12px; padding: 14px 16px;
+  }
+  .kpi .n {
+    font-family: var(--font-mono); font-size: 24px; font-weight: 700; color: var(--color-ink);
+  }
+  .kpi .n.warn { color: var(--color-warn); }
+  .kpi .n.danger { color: var(--color-danger); }
+  .kpi .l { font-size: 12px; color: var(--color-ink-faint); margin-top: 2px; }
+
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 780px) { .panels { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--color-panel); border: 1px solid var(--color-panel-border);
+    border-radius: 14px; padding: 16px 18px;
+  }
+  .bar-row { margin-bottom: 10px; }
+  .bar-row:last-child { margin-bottom: 0; }
+  .bar-row .bar-label {
+    display: flex; justify-content: space-between; font-size: 13px;
+    margin-bottom: 4px; color: var(--color-ink-dim);
+  }
+  .bar-row .bar-label b { color: var(--color-ink); font-weight: 600; }
+  .bar-track {
+    height: 8px; border-radius: 6px; background: var(--color-bg-soft); overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%; border-radius: 6px;
+    background: linear-gradient(90deg, var(--color-accent), var(--color-accent2));
+    transition: width 0.4s ease;
+  }
+  .empty { color: var(--color-ink-faint); font-size: 13px; padding: 6px 0; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font-family: var(--font-mono); font-size: 12px;
+    background: var(--color-accent-soft); color: var(--color-accent);
+    border-radius: 999px; padding: 4px 10px;
+  }
+
+  footer.note {
+    font-size: 12px; color: var(--color-ink-faint); line-height: 1.6;
+    border-top: 1px solid var(--color-panel-border); padding-top: 16px;
+  }
+  footer.note code { font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 4v16"/>
+          <path d="M5 4c6 0 10 3.2 10 8s-4 8-10 8"/>
+          <line x1="16.5" y1="19.5" x2="21.5" y2="19.5"/>
+        </svg>
+      </span>
+      <span class="name-block">
+        <span class="wordmark">deeCtx</span>
+        <div class="tagline">Data Compliant Token Xchange · local dashboard</div>
+      </span>
+    </div>
+    <div class="header-right">
+      <a class="site-link" href="https://www.deectx.com/" target="_blank" rel="noreferrer">deeCtx.com</a>
+      <a class="gh-star" href="https://github.com/deectxone/deectx" target="_blank" rel="noreferrer">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+        </svg>
+        Star on GitHub
+      </a>
+      <div class="status-pill"><span class="dot"></span><span id="updated-at">connecting…</span></div>
+    </div>
+  </header>
+
+  <div id="err-banner"></div>
+
+  <div class="hero">
+    <div class="hero-card">
+      <div class="label">PII kept off the wire today</div>
+      <div class="big" id="hero-protected">–</div>
+      <div class="sub" id="hero-sub">masked + redacted, before it ever left this machine</div>
+    </div>
+    <div class="hero-meta">
+      <div><strong id="meta-requests">–</strong> requests masked-checked today</div>
+      <div><strong id="meta-sessions">–</strong> distinct coding sessions</div>
+      <div><strong id="meta-date">–</strong></div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Today</h2>
+    <div class="kpis">
+      <div class="kpi"><div class="n" id="k-requests">–</div><div class="l">requests</div></div>
+      <div class="kpi"><div class="n" id="k-masked">–</div><div class="l">masked</div></div>
+      <div class="kpi"><div class="n" id="k-redacted">–</div><div class="l">redacted</div></div>
+      <div class="kpi"><div class="n warn" id="k-alerts">–</div><div class="l">alerts (special category)</div></div>
+      <div class="kpi"><div class="n danger" id="k-errors">–</div><div class="l">masking errors (this session, fail-open)</div></div>
+    </div>
+  </section>
+
+  <section class="panels">
+    <div class="panel">
+      <h2>Detected today, by type</h2>
+      <div id="entities-bars"><div class="empty">No detections yet today.</div></div>
+    </div>
+    <div class="panel">
+      <h2>Tools sending traffic today</h2>
+      <div id="tools-bars"><div class="empty">No tool activity yet today.</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Active packs</h2>
+    <div class="chips" id="packs-chips"><span class="empty">none reporting yet</span></div>
+  </section>
+
+  <footer class="note">
+    Live counters are for this proxy process since it started; the panels above are today's totals
+    from the local ledger (<code>~/.deectx/ledger.jsonl</code>), which survive a restart.
+    deeCtx never stores or displays the values it masks — only entity <em>types</em> and counts,
+    identified by hash. What you see here is everything this dashboard, or anyone reading the ledger,
+    can ever know about what passed through. Auto-refreshes every 5s · reachable only at 127.0.0.1.
+  </footer>
+</div>
+
+<script>
+(function () {
+  const fmt = new Intl.NumberFormat();
+  const errBanner = document.getElementById('err-banner');
+  let sawAuditOnce = false;
+
+  function showErr(msg) {
+    errBanner.textContent = msg;
+    errBanner.style.display = 'block';
+  }
+  function clearErr() {
+    errBanner.style.display = 'none';
+  }
+
+  function renderBars(containerId, map, emptyText) {
+    const el = document.getElementById(containerId);
+    const entries = Object.entries(map || {}).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    if (entries.length === 0) {
+      el.innerHTML = '<div class="empty">' + emptyText + '</div>';
+      return;
+    }
+    const max = entries[0][1] || 1;
+    el.innerHTML = entries.map(function (pair) {
+      const pct = Math.max(4, Math.round((pair[1] / max) * 100));
+      return '<div class="bar-row">' +
+        '<div class="bar-label"><span>' + pair[0] + '</span><b>' + fmt.format(pair[1]) + '</b></div>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
+        '</div>';
+    }).join('');
+  }
+
+  async function tick() {
+    try {
+      const [statsRes, auditRes] = await Promise.all([
+        fetch('/stats', { cache: 'no-store' }),
+        fetch('/audit/today', { cache: 'no-store' }),
+      ]);
+
+      if (statsRes.ok) {
+        const s = await statsRes.json();
+        document.getElementById('k-errors').textContent = fmt.format(s.errors || 0);
+      }
+
+      if (auditRes.ok) {
+        const a = await auditRes.json();
+        sawAuditOnce = true;
+        const protectedCount = (a.masked_events || 0) + (a.redacted_events || 0);
+        document.getElementById('hero-protected').textContent = fmt.format(protectedCount);
+        document.getElementById('meta-requests').textContent = fmt.format(a.total_requests || 0);
+        document.getElementById('meta-sessions').textContent = fmt.format(a.distinct_sessions || 0);
+        document.getElementById('meta-date').textContent = a.date || '';
+        document.getElementById('k-requests').textContent = fmt.format(a.total_requests || 0);
+        document.getElementById('k-masked').textContent = fmt.format(a.masked_events || 0);
+        document.getElementById('k-redacted').textContent = fmt.format(a.redacted_events || 0);
+        document.getElementById('k-alerts').textContent = fmt.format(a.alerts || 0);
+        renderBars('entities-bars', a.entities, 'No detections yet today.');
+        renderBars('tools-bars', a.tools, 'No tool activity yet today.');
+
+        const packs = Object.keys(a.packs || {});
+        const chipsEl = document.getElementById('packs-chips');
+        chipsEl.innerHTML = packs.length
+          ? packs.map(function (p) { return '<span class="chip">' + p + '</span>'; }).join('')
+          : '<span class="empty">none reporting yet</span>';
+      } else if (!sawAuditOnce) {
+        showErr('Could not load today’s audit summary yet (' + auditRes.status + '). Live counters below still work.');
+      }
+
+      if (statsRes.ok && auditRes.ok) clearErr();
+      document.getElementById('updated-at').textContent =
+        'updated ' + new Date().toLocaleTimeString();
+    } catch (e) {
+      showErr('Lost connection to the deeCtx proxy — is it still running?');
+      document.getElementById('updated-at').textContent = 'disconnected';
+    }
+  }
+
+  tick();
+  setInterval(tick, 5000);
+})();
+</script>
+</body>
+</html>

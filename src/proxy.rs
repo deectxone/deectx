@@ -8,7 +8,13 @@ use crate::sse::SseRehydrator;
 use crate::stats::LiveStats;
 use anyhow::Result;
 use axum::body::Body;
-use axum::{body::Bytes, extract::State, http::HeaderMap, response::Response, Router};
+use axum::{
+    body::Bytes,
+    extract::State,
+    http::HeaderMap,
+    response::{IntoResponse, Response},
+    Router,
+};
 use chrono::Utc;
 use futures_util::StreamExt;
 use std::sync::{Arc, Mutex};
@@ -91,7 +97,11 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
             axum::routing::get(crate::responses_ws::ws_handler),
         );
     if stats_enabled {
-        app = app.route("/stats", axum::routing::get(handle_stats));
+        app = app
+            .route("/stats", axum::routing::get(handle_stats))
+            .route("/audit/today", axum::routing::get(handle_audit_today))
+            .route("/", axum::routing::get(handle_dashboard))
+            .route("/dashboard", axum::routing::get(handle_dashboard));
     }
     let app = app.fallback(handle_passthrough).with_state(state);
     axum::serve(listener, app).await?;
@@ -152,12 +162,11 @@ async fn handle_completion(
             .unwrap();
     }
     let mut events = Vec::new();
-    mask_walk(&st, &session, &mut events, &mut json);
+    let out = mask_or_forward_unmasked(&st, &session, &mut events, &mut json, &body);
     let stream = json
         .get("stream")
         .and_then(|s| s.as_bool())
         .unwrap_or(false);
-    let out = serde_json::to_vec(&json).unwrap_or_else(|_| body.to_vec());
     let resp = forward_raw(
         &st,
         format,
@@ -190,6 +199,32 @@ async fn handle_completion(
 
 async fn handle_stats(State(st): State<Arc<AppState>>) -> axum::Json<crate::stats::StatsSnapshot> {
     axum::Json(st.stats.snapshot())
+}
+
+/// Today's ledger summary as JSON — entity **types** and counts only (e.g.
+/// `{"email": 4, "api_key": 1}`), the same hash-only aggregation `deectx
+/// audit --today` prints. Never the masked values themselves: the ledger
+/// never stores raw PII, so there is nothing more revealing to serve.
+async fn handle_audit_today(State(st): State<Arc<AppState>>) -> Response {
+    let today = Utc::now().date_naive();
+    match crate::audit::summarize_for_date(st.ledger.path(), today) {
+        Ok(summary) => axum::Json(summary).into_response(),
+        Err(e) => {
+            tracing::warn!("dashboard: could not read today's audit summary: {e}");
+            Response::builder()
+                .status(500)
+                .body(Body::from("deeCtx: could not read today's audit summary"))
+                .unwrap()
+        }
+    }
+}
+
+/// The local status dashboard (`GET /` and `/dashboard`): live counters,
+/// today's masked/redacted breakdown by entity type, and which tools are
+/// wired in — served from the same process that's already doing the masking,
+/// so it needs no separate auth story beyond "you can reach 127.0.0.1".
+async fn handle_dashboard() -> impl IntoResponse {
+    axum::response::Html(include_str!("dashboard.html"))
 }
 
 /// Transparent reverse-proxy fallback for any endpoint the router does not
@@ -243,10 +278,13 @@ async fn handle_passthrough(
         if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&body) {
             let session = session_id(&json);
             let mut events = Vec::new();
-            mask_walk(&st, &session, &mut events, &mut json);
-            if let Ok(v) = serde_json::to_vec(&json) {
-                out_body = Bytes::from(v);
-            }
+            out_body = Bytes::from(mask_or_forward_unmasked(
+                &st,
+                &session,
+                &mut events,
+                &mut json,
+                &body,
+            ));
             // Record the count_tokens masking to the hash-only ledger, like a
             // completion, so `deectx audit` counts it.
             let tool = headers
@@ -282,6 +320,37 @@ async fn handle_passthrough(
         false,
     )
     .await
+}
+
+/// Run `mask_walk` and re-serialize, but never let a masking bug block or
+/// corrupt a user's request. On a panic or serialization failure, discard
+/// whatever partial masking happened, record it to `/stats` `errors` (so
+/// `deectx status`/`audit` surface it instead of it silently biting the next
+/// user), and forward the original body unmasked — a seamless session beats a
+/// hard failure or a corrupted upstream call over a bug in this proxy.
+pub(crate) fn mask_or_forward_unmasked(
+    st: &AppState,
+    session: &str,
+    events: &mut Vec<LedgerEvent>,
+    json: &mut serde_json::Value,
+    body: &Bytes,
+) -> Vec<u8> {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        mask_walk(st, session, events, json);
+        serde_json::to_vec(json)
+    }));
+    match outcome {
+        Ok(Ok(bytes)) => bytes,
+        _ => {
+            events.clear();
+            st.stats.record_error();
+            tracing::warn!(
+                "masking failed for this request; forwarding it unmasked rather than \
+                 blocking the session or sending a corrupted request upstream"
+            );
+            body.to_vec()
+        }
+    }
 }
 
 pub(crate) fn mask_walk(
@@ -324,12 +393,39 @@ pub(crate) fn mask_walk(
             changed
         }
         serde_json::Value::Object(obj) => {
+            // tool_use / tool_call blocks carry a protocol id (e.g. Anthropic
+            // `toolu_...`, OpenAI `call_...`) alongside their `type`. These are
+            // high-entropy strings that the secrets detector happily flags as
+            // an api_key, but masking them corrupts the id — upstream APIs
+            // require it to match `^[a-zA-Z0-9_-]+$` and reject the request
+            // with a 400 otherwise. Skip id fields, never their content.
+            let owns_tool_id = matches!(
+                obj.get("type").and_then(|t| t.as_str()),
+                Some("tool_use") | Some("tool_result") | Some("function")
+            );
             let mut changed = false;
-            for (_, v) in obj.iter_mut() {
+            for (k, v) in obj.iter_mut() {
+                if is_protocol_id_field(k, owns_tool_id) {
+                    continue;
+                }
                 changed |= mask_walk(st, session, events, v);
             }
             changed
         }
+        _ => false,
+    }
+}
+
+/// True when `key` in this object holds a tool_use/tool_call protocol id
+/// rather than free-text content. `tool_use_id`/`tool_call_id`/`call_id` are
+/// unambiguous field names; bare `id` is only excluded when the enclosing
+/// object is itself a tool_use/tool_result/function block (Anthropic content
+/// blocks and OpenAI `tool_calls[]` entries), so an arbitrary tool argument
+/// schema that happens to use the key `id` is still masked normally.
+fn is_protocol_id_field(key: &str, owns_tool_id: bool) -> bool {
+    match key {
+        "tool_use_id" | "tool_call_id" | "call_id" => true,
+        "id" => owns_tool_id,
         _ => false,
     }
 }
@@ -664,6 +760,22 @@ mod tests {
             axum::http::HeaderValue::from_static("br"),
         );
         assert!(is_gzip_like_headers(&h), "br is gzip-like");
+    }
+
+    #[test]
+    fn protocol_id_fields_are_never_masked() {
+        assert!(is_protocol_id_field("tool_use_id", false));
+        assert!(is_protocol_id_field("tool_call_id", false));
+        assert!(is_protocol_id_field("call_id", false));
+        assert!(
+            is_protocol_id_field("id", true),
+            "bare `id` is excluded only inside a tool_use/tool_result/function block"
+        );
+        assert!(
+            !is_protocol_id_field("id", false),
+            "bare `id` elsewhere (e.g. a user-defined tool argument) must still be masked"
+        );
+        assert!(!is_protocol_id_field("email", true));
     }
 
     #[test]
