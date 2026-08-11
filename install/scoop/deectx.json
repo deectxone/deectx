@@ -10,7 +10,7 @@
   },
   "architecture": {
     "64bit": {
-      "hash": "d98daef61e9e327c5e18c68620f34c1116a2f11050bcdce6830d7c8f8c8ced30",
+      "hash": "89d0903150a1eae38553b8b8de09d3973627f98c4ab6a76ff5b3cba17ece1a1d",
       "url": "https://github.com/deectxone/deectx/releases/download/v0.2.2/deectx-x86_64-pc-windows-msvc.zip"
     }
   },
