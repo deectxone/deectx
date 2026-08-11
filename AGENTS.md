@@ -84,7 +84,7 @@ Install paths ship prebuilt binaries first (Scoop / `cargo binstall` / prebuilt 
 | `src/packs/` | Pack YAML definitions: `default`, `gdpr`, `cdr-au` + loader |
 | `config.example.toml` | Documented example config |
 | `shims/` | Integration shims for Cursor + opencode |
-| `install/` | Homebrew formula + Scoop manifest (`release.yml` refreshes hashes on tag) |
+| `install/` | Homebrew formula + Scoop manifest (`release.yml` refreshes hashes on tag and pushes to the `homebrew-deectx`/`scoop-deectx` repos — see `install/brew/README.md`, `install/scoop/README.md`) |
 | `scripts/` | `release.ps1`, `release.sh` (build + package) |
 | `tests/` | `proxy_integration.rs`, `passthrough_integration.rs`, `golden_set.rs`, `installers.rs` |
 | `.github/workflows/` | `ci.yml` (fmt+clippy+test), `release.yml` (tag builds + publish), `agents-doc-freshness.yml` |

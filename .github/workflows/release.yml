@@ -287,3 +287,35 @@ jobs:
             git commit -m "release: deectx ${{ github.ref_name }}"
             git push origin HEAD:master
           fi
+
+      - name: Push formula to homebrew-deectx tap
+        # Homebrew taps require the formula at Formula/<name>.rb in a repo
+        # named homebrew-<tap> (Homebrew strips the prefix) — `brew install
+        # deectx` reads deectxone/homebrew-deectx directly, never this repo,
+        # so the refreshed formula above must be copied over there too.
+        # Needs a PAT with write access to deectxone/homebrew-deectx —
+        # GITHUB_TOKEN only covers the current repo. Skipped if the secret
+        # isn't configured yet.
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN}" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set; skipping homebrew-deectx tap push."
+            echo "See install/brew/README.md for setup."
+            exit 0
+          fi
+          rm -rf /tmp/homebrew-deectx
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/deectxone/homebrew-deectx.git" /tmp/homebrew-deectx
+          mkdir -p /tmp/homebrew-deectx/Formula
+          cp install/brew/deectx.rb /tmp/homebrew-deectx/Formula/deectx.rb
+          cd /tmp/homebrew-deectx
+          git config user.name "deectx-release-bot"
+          git config user.email "deectx-bot@users.noreply.github.com"
+          git add Formula/deectx.rb
+          if git diff --cached --quiet; then
+            echo "No formula changes for homebrew-deectx."
+          else
+            git commit -m "release: deectx ${{ github.ref_name }}"
+            git push origin HEAD:main
+          fi
