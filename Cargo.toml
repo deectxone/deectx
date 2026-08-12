@@ -31,6 +31,12 @@ ort = { version = "2.0.0-rc.13", optional = true, features = ["load-dynamic", "n
 ndarray = { version = "0.17", optional = true }
 tokenizers = { version = "0.20", optional = true }
 
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+tray-icon = { version = "0.24", default-features = false }
+muda = { version = "0.19", default-features = false }
+tao = { version = "0.36", default-features = false }
+open = "5.4"
+
 [[bin]]
 name = "ner_spike"
 path = "src/bin/ner_spike.rs"

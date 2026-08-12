@@ -15,4 +15,6 @@ pub mod span;
 pub mod sse;
 pub mod stats;
 pub mod status;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub mod tray;
 pub mod upstream;
