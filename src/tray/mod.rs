@@ -135,13 +135,17 @@ fn try_run_with_tray(cfg: crate::config::Config) -> anyhow::Result<()> {
                 TrayState::Active
             };
             toggle_item.set_text(toggle_label_for(&state));
+            open_item.set_enabled(matches!(state, TrayState::Active));
             tray_icon.set_tooltip(Some(tooltip_for(&state))).ok();
             if let Ok(icon) = build_icon(&state) {
                 tray_icon.set_icon(Some(icon)).ok();
             }
         } else if event.id == quit_item.id() {
             if handle.is_running() {
-                handle.stop();
+                let warnings = handle.stop();
+                for w in &warnings {
+                    tracing::warn!("tray: {w}");
+                }
             }
             *control_flow = ControlFlow::Exit;
         }
