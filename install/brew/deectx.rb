@@ -11,18 +11,18 @@ class Deectx < Formula
   on_macos do
     on_arm do
       url "https://github.com/deectxone/deectx/releases/download/v#{version}/deectx-aarch64-apple-darwin.tar.gz"
-      sha256 "47cbfa0b51377018fda1f7ec607ac0a6db6f2b728cb61b3bf2e13dee1c49b05d"
+      sha256 "9b3e0974a6e893a1379e9e231226bdee05ba950aec533ec9ec48ae50a5d5c920"
     end
     on_intel do
       url "https://github.com/deectxone/deectx/releases/download/v#{version}/deectx-x86_64-apple-darwin.tar.gz"
-      sha256 "9e457cba2fc8265438fae8878dc006480ac5d1a5505104c0b942670e24357d6f"
+      sha256 "426050464ca8aaf7547c1c725336d5366689adf0868f8b401b88cd62eb1a094b"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/deectxone/deectx/releases/download/v#{version}/deectx-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "559cbc33a0947f62687242971d709143603b030c7e68c47a5643fb284daea5a5"
+      sha256 "d0ceb3732f805470ce20eee8014dfe5f82bd06870a3f18a529a0a42dfcde0cc6"
     end
   end
 
