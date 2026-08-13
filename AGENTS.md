@@ -137,14 +137,22 @@ share the method-agnostic `forward`. Streams via `SseRehydrator`; non-streams re
 `mask_walk` skips `tool_use_id`/`tool_call_id`/`call_id`, and bare `id` when the enclosing object
 is a `tool_use`/`tool_result`/`function` block (`is_protocol_id_field`) — these are high-entropy
 protocol ids the secrets detector would otherwise flag as an `api_key` and mask, corrupting the id
-and breaking the upstream schema. `mask_or_forward_unmasked` wraps `mask_walk` + serialization in
+and breaking the upstream schema. It also skips `thinking`/`redacted_thinking` blocks entirely:
+the `signature` on a `thinking` block is cryptographically bound to the exact `thinking` text, so
+masking either one invalidates the signature and upstream rejects the whole request with 400 — same
+failure mode as the protocol-id case. `mask_or_forward_unmasked` wraps `mask_walk` + serialization in
 `catch_unwind`: any panic or serialize failure forwards the original body unmasked (never blocks
 or corrupts the request) and increments `stats.errors`, surfaced in `/stats`, `deectx status`, and
-the dashboard.
+the dashboard. `handle_completion`/`handle_passthrough` also retry once, unmasked, whenever a
+*masked* request comes back 400 from upstream — that status only means "the masker corrupted
+something," never "the client sent a bad request," so it fails open with a `tracing::error!` and a
+`stats.errors` count rather than surfacing the bug as a broken tool session.
 
 ### Lifecycle & autostart (`src/lifecycle.rs`, `src/setup.rs`)
 `lifecycle::start` (idempotent) stops any running/stale proxy (via `deectx.pid` + `ProcessManager`),
-wires tools, installs the login autostart, and spawns `serve`; `stop` unwraps tools + kills the
+wires tools, installs the login autostart, and spawns the resident process — `tray` on
+Windows/macOS, `serve` on Linux (`ProcessManager::spawn_serve`), matching what `install_daemon`
+wires for next login; `stop` unwraps tools + kills the
 proxy + removes autostart; `uninstall` = stop + optional data delete. `stop`/`uninstall` return
 `Vec<String>` restore warnings (never silently swallowed) so `deectx stop` tells you when a tool
 config couldn't be restored instead of claiming success. `setup.rs` still owns the low-level tool
