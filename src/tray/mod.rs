@@ -4,3 +4,4 @@
 //! `docs/superpowers/specs/2026-08-12-tray-icon-design.md`.
 
 pub(crate) mod icon;
+pub(crate) mod proxy_handle;

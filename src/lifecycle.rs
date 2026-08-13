@@ -83,7 +83,7 @@ fn ensure_config() -> anyhow::Result<()> {
 
 /// Wire every installed, non-locked tool to the proxy. Returns per-tool wired
 /// state for the status report; a single tool failing never aborts the rest.
-fn wire_tools() -> Vec<(Tool, bool)> {
+pub(crate) fn wire_tools() -> Vec<(Tool, bool)> {
     let mut out = Vec::new();
     for (tool, path) in crate::setup::discover() {
         if crate::setup::is_locked(tool, &path) {
