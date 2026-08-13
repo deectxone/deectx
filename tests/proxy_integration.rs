@@ -798,3 +798,50 @@ async fn serve_with_listener_and_shutdown_stops_on_signal() {
         .await
         .is_err());
 }
+
+#[tokio::test]
+async fn run_proxy_with_shutdown_and_ready_signals_ready_after_bind() {
+    let ledger_path =
+        std::env::temp_dir().join(format!("deectx_ready_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        ledger_path,
+        ..Default::default()
+    };
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let shutdown = async {
+        let _ = shutdown_rx.await;
+    };
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
+
+    let server = tokio::spawn(deectx::proxy::run_proxy_with_shutdown_and_ready(
+        cfg,
+        shutdown,
+        Some(ready_tx),
+    ));
+
+    // The ready signal must fire promptly once the listener has actually
+    // bound — this is what ProxyHandle::start's bounded wait relies on to
+    // know the proxy is genuinely serving rather than just "a thread exists".
+    let ready = tokio::task::spawn_blocking(move || {
+        ready_rx.recv_timeout(std::time::Duration::from_secs(5))
+    })
+    .await
+    .unwrap();
+    assert!(
+        ready.is_ok(),
+        "ready signal must fire after a successful bind"
+    );
+
+    shutdown_tx.send(()).unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        .await
+        .expect("server task must finish within 5s of the shutdown signal")
+        .unwrap();
+    assert!(
+        result.is_ok(),
+        "graceful shutdown must return Ok: {result:?}"
+    );
+}

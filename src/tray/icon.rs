@@ -2,32 +2,17 @@
 //! external asset pipeline — deeCtx ships fully self-contained, so each
 //! state is a small filled circle in a brand color, generated at runtime.
 
-// Consumed starting in a later task (tray icon/menu wiring); allowed dead
-// here since this task is deliberately just the rendering scaffolding.
-#[allow(dead_code)]
 pub const ICON_SIZE: u32 = 32;
 
 /// Accent green — masking active. Same token as `src/dashboard.html`.
-// Consumed starting in a later task (tray icon/menu wiring); allowed dead
-// here since this task is deliberately just the rendering scaffolding.
-#[allow(dead_code)]
 pub const COLOR_ACTIVE: [u8; 3] = [0x12, 0x74, 0x4f];
 /// Ink-faint grey — masking stopped.
-// Consumed starting in a later task (tray icon/menu wiring); allowed dead
-// here since this task is deliberately just the rendering scaffolding.
-#[allow(dead_code)]
 pub const COLOR_STOPPED: [u8; 3] = [0x83, 0x88, 0x7e];
 /// Warn amber — stopped, but with a restore warning to show.
-// Consumed starting in a later task (tray icon/menu wiring); allowed dead
-// here since this task is deliberately just the rendering scaffolding.
-#[allow(dead_code)]
 pub const COLOR_WARNING: [u8; 3] = [0xb3, 0x78, 0x1c];
 
 /// Renders a filled circle of `rgb` on a transparent `ICON_SIZE`x`ICON_SIZE`
 /// canvas, as a tightly-packed RGBA8 buffer (row-major, 4 bytes/pixel).
-// Consumed starting in a later task (tray icon/menu wiring); allowed dead
-// here since this task is deliberately just the rendering scaffolding.
-#[allow(dead_code)]
 pub fn render_circle_rgba(rgb: [u8; 3]) -> Vec<u8> {
     let size = ICON_SIZE;
     let mut rgba = vec![0u8; (size * size * 4) as usize];

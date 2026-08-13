@@ -6,27 +6,22 @@
 
 use crate::config::Config;
 
-// Consumed starting in a later task (tray icon/menu wiring); allowed dead
-// here since this task is deliberately just the in-process control plane.
-// The non-test `--lib` build doesn't see `#[cfg(test)] mod tests` usage below,
-// so without this it dead-codes exactly like `tray::icon` did in an earlier
-// task (see commit "tray: silence dead_code on icon items unused until later
-// tasks").
-#[allow(dead_code)]
 pub(crate) struct ProxyHandle {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    bound: bool,
 }
 
-#[allow(dead_code)]
 impl ProxyHandle {
     /// Wires every installed, non-locked tool to the proxy (same as
     /// `lifecycle::start`'s wiring step), then spawns the masking proxy on a
-    /// background thread. Returns immediately; the proxy binds asynchronously
-    /// on that thread.
+    /// background thread. Blocks briefly (up to ~2s) for the listener to
+    /// confirm it actually bound, so `is_running()` reflects real bind
+    /// status rather than just "a thread was spawned".
     pub(crate) fn start(cfg: Config) -> ProxyHandle {
         let _wired = crate::lifecycle::wire_tools();
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
         let thread = std::thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
@@ -38,13 +33,26 @@ impl ProxyHandle {
             let shutdown = async {
                 let _ = rx.await;
             };
-            if let Err(e) = rt.block_on(crate::proxy::run_proxy_with_shutdown(cfg, shutdown)) {
+            if let Err(e) = rt.block_on(crate::proxy::run_proxy_with_shutdown_and_ready(
+                cfg,
+                shutdown,
+                Some(ready_tx),
+            )) {
                 tracing::warn!("tray-hosted proxy exited with error: {e}");
             }
         });
+        // Bounded wait for the bind-success signal — mirrors
+        // lifecycle::await_started's ~2s budget for the CLI's own `start`.
+        // If it never arrives (bind failed, or the thread errored before
+        // binding), `bound` stays false and callers must not treat this as
+        // a healthy running proxy.
+        let bound = ready_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_ok();
         ProxyHandle {
             shutdown_tx: Some(tx),
             thread: Some(thread),
+            bound,
         }
     }
 
@@ -71,11 +79,12 @@ impl ProxyHandle {
         warnings
     }
 
-    /// True once `start` has been called and `stop` hasn't (yet) joined the
-    /// background thread. Does not confirm the listener has actually bound —
-    /// good enough for the icon's optimistic on/off state in v1.
+    /// True only when the listener actually bound successfully — not just
+    /// that a thread was spawned. A `start()` whose bind failed reports
+    /// `false` here even though `thread` is still `Some` until `stop()`
+    /// joins it.
     pub(crate) fn is_running(&self) -> bool {
-        self.thread.is_some()
+        self.thread.is_some() && self.bound
     }
 }
 

@@ -98,13 +98,28 @@ fn try_run_with_tray(cfg: crate::config::Config) -> anyhow::Result<()> {
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&quit_item)?;
 
-    let mut state = TrayState::Active;
-    let mut handle = proxy_handle::ProxyHandle::start(cfg);
     let tray_icon: TrayIcon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip(tooltip_for(&state))
-        .with_icon(build_icon(&state)?)
+        .with_tooltip(tooltip_for(&TrayState::Active))
+        .with_icon(build_icon(&TrayState::Active)?)
         .build()?;
+
+    // Only start the proxy once the fallible tray/menu setup above has
+    // succeeded — starting it earlier risked a port race with run()'s
+    // headless fallback: if tray setup failed afterward, the proxy would
+    // already be bound to the port the fallback then tries to rebind.
+    let mut handle = proxy_handle::ProxyHandle::start(cfg);
+    let mut state = if handle.is_running() {
+        TrayState::Active
+    } else {
+        TrayState::Stopped
+    };
+    toggle_item.set_text(toggle_label_for(&state));
+    open_item.set_enabled(matches!(state, TrayState::Active));
+    tray_icon.set_tooltip(Some(tooltip_for(&state))).ok();
+    if let Ok(icon) = build_icon(&state) {
+        tray_icon.set_icon(Some(icon)).ok();
+    }
 
     let menu_channel = MenuEvent::receiver();
     let event_loop = EventLoopBuilder::new().build();

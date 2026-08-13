@@ -54,7 +54,24 @@ pub async fn run_proxy_with_shutdown(
     cfg: Config,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
+    run_proxy_with_shutdown_and_ready(cfg, shutdown, None).await
+}
+
+/// Like [`run_proxy_with_shutdown`], but additionally signals `ready` (if
+/// given) the moment the listener has successfully bound — before that,
+/// `bind` may still fail (port in use, etc.). Lets a caller like the tray's
+/// `ProxyHandle` distinguish "genuinely bound and serving" from "assumed
+/// success the instant the call was made," which is what `is_running()`
+/// needs to avoid showing an "active" icon over a dead listener.
+pub async fn run_proxy_with_shutdown_and_ready(
+    cfg: Config,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+    ready: Option<std::sync::mpsc::Sender<()>>,
+) -> Result<()> {
     let listener = TcpListener::bind(&cfg.listen).await?;
+    if let Some(tx) = ready {
+        let _ = tx.send(());
+    }
     let actual = listener.local_addr()?.to_string();
     tracing::info!("deectx listening on {}", actual);
     let pf = crate::home::Pidfile {
