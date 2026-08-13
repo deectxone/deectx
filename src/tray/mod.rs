@@ -6,6 +6,7 @@
 use crate::tray::icon::{COLOR_ACTIVE, COLOR_STOPPED, COLOR_WARNING};
 
 pub(crate) mod icon;
+pub(crate) mod icon_masks;
 pub(crate) mod proxy_handle;
 
 /// What the tray icon/menu currently show. Kept separate from the GUI crates
