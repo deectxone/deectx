@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use deectx::config::Config;
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -72,8 +73,8 @@ fn load_config(config: &std::path::Path) -> Result<Config> {
 }
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
+    init_tracing(&cli.cmd);
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     if matches!(cli.cmd, Some(Cmd::Tray)) {
@@ -81,6 +82,52 @@ fn main() -> Result<()> {
     }
 
     tokio::runtime::Runtime::new()?.block_on(async_main(cli))
+}
+
+/// `serve`/`tray` run detached from any console once launched by the login
+/// autostart (or the tray icon, which owns its own event loop rather than a
+/// terminal) — `tracing`'s default stdout writer then has nowhere visible to
+/// go, so errors like a masking-caused fail-open retry are invisible even
+/// though `/stats` counts them. Route those two commands' tracing output to
+/// `~/.deectx/deectx.log` instead; every other (interactive, one-shot)
+/// command keeps logging to stdout as before.
+fn init_tracing(cmd: &Option<Cmd>) {
+    let long_running = matches!(cmd, Some(Cmd::Serve { .. }));
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    let long_running = long_running || matches!(cmd, Some(Cmd::Tray));
+
+    if long_running {
+        let path = deectx::home::log_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path);
+        if let Ok(file) = file {
+            let file = std::sync::Arc::new(std::sync::Mutex::new(file));
+            let result = tracing_subscriber::fmt()
+                .with_writer(move || LogFileWriter(file.clone()))
+                .with_ansi(false)
+                .try_init();
+            if result.is_ok() {
+                return;
+            }
+        }
+    }
+    tracing_subscriber::fmt::init();
+}
+
+struct LogFileWriter(std::sync::Arc<std::sync::Mutex<std::fs::File>>);
+
+impl Write for LogFileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.lock().unwrap().flush()
+    }
 }
 
 async fn async_main(cli: Cli) -> Result<()> {

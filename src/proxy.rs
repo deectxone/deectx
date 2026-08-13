@@ -494,11 +494,8 @@ pub(crate) fn mask_walk(
             // signature or the thinking text it covers invalidates the signature,
             // and upstream rejects the whole request with a 400. Skip the block
             // entirely rather than trying to pick individual safe fields out of it.
-            let is_thinking_block = matches!(
-                obj.get("type").and_then(|t| t.as_str()),
-                Some("thinking") | Some("redacted_thinking")
-            );
-            if is_thinking_block {
+            let block_type = obj.get("type").and_then(|t| t.as_str());
+            if is_opaque_content_block(block_type) {
                 return false;
             }
             let mut changed = false;
@@ -512,6 +509,32 @@ pub(crate) fn mask_walk(
         }
         _ => false,
     }
+}
+
+/// True when a content block's `type` marks it as carrying opaque data that
+/// must never be walked into and masked as text.
+///
+/// - `thinking`/`redacted_thinking`: the `signature`/`data` field is
+///   cryptographically bound to the exact block content; any edit (including
+///   masking) invalidates it and upstream rejects the whole request.
+/// - `image`/`document` (Anthropic) and `image_url`/`input_audio` (OpenAI):
+///   the payload is base64 — exactly what the entropy-based secrets detector
+///   is tuned to catch, so every ~21-char run of it reads as a plausible API
+///   key and gets redacted piecemeal, corrupting the payload the same way.
+///
+/// None of these block types carry human-authored text worth masking, so
+/// the whole block is skipped rather than picking individual safe fields
+/// out of it.
+fn is_opaque_content_block(block_type: Option<&str>) -> bool {
+    matches!(
+        block_type,
+        Some("thinking")
+            | Some("redacted_thinking")
+            | Some("image")
+            | Some("document")
+            | Some("image_url")
+            | Some("input_audio")
+    )
 }
 
 /// True when `key` in this object holds a tool_use/tool_call protocol id
@@ -874,6 +897,78 @@ mod tests {
             "bare `id` elsewhere (e.g. a user-defined tool argument) must still be masked"
         );
         assert!(!is_protocol_id_field("email", true));
+    }
+
+    #[test]
+    fn opaque_content_blocks_are_never_masked() {
+        for t in [
+            "thinking",
+            "redacted_thinking",
+            "image",
+            "document",
+            "image_url",
+            "input_audio",
+        ] {
+            assert!(
+                is_opaque_content_block(Some(t)),
+                "{t} must be treated as opaque"
+            );
+        }
+        assert!(!is_opaque_content_block(Some("text")));
+        assert!(!is_opaque_content_block(Some("tool_use")));
+        assert!(!is_opaque_content_block(None));
+    }
+
+    fn test_app_state() -> AppState {
+        let cfg = crate::config::Config {
+            ledger_path: std::env::temp_dir()
+                .join(format!("deectx_test_ledger_{}.jsonl", std::process::id())),
+            ..crate::config::Config::default()
+        };
+        let packs = packs::load_active(&cfg);
+        let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
+        let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(&cfg, &packs));
+        AppState {
+            upstream: cfg.upstream.clone(),
+            anthropic_upstream: "https://api.anthropic.com".to_string(),
+            upstream_responses: cfg.upstream_responses.clone(),
+            chain: packs::build_chain(&packs, cfg.ner, std::path::PathBuf::from("./models")),
+            masker: std::sync::Arc::new(Masker::new()),
+            ledger: Ledger::new(cfg.ledger_path, cfg.ledger_retention_days).unwrap(),
+            http: reqwest::Client::new(),
+            packs: pack_names,
+            allowlist,
+            fail_closed: packs.iter().any(|p| p.settings.fail_closed),
+            stats: std::sync::Arc::new(LiveStats::new()),
+        }
+    }
+
+    #[test]
+    fn base64_image_payload_survives_mask_walk_untouched() {
+        // A base64 image payload is exactly the shape the entropy-based
+        // secrets detector flags as an api_key; mask_walk must leave the
+        // whole image block alone rather than redacting chunks of it.
+        let st = test_app_state();
+        let base64_payload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        let mut json = serde_json::json!({
+            "messages": [{
+                "role": "user",
+                "content": [{
+                    "type": "image",
+                    "source": { "type": "base64", "media_type": "image/png", "data": base64_payload }
+                }]
+            }]
+        });
+        let mut events = Vec::new();
+        mask_walk(&st, "s_test", &mut events, &mut json);
+        assert_eq!(
+            json["messages"][0]["content"][0]["source"]["data"], base64_payload,
+            "image payload must be byte-identical after mask_walk"
+        );
+        assert!(
+            events.is_empty(),
+            "no masking events should fire on an opaque image block"
+        );
     }
 
     #[test]

@@ -30,6 +30,14 @@ pub fn pidfile_path() -> PathBuf {
     deectx_home().join("deectx.pid")
 }
 
+/// Log file location: `<home>/deectx.log`. The long-running proxy (`serve`/
+/// `tray`) has no attached console once launched by the login autostart, so
+/// its `tracing` output — including fail-open masking-error diagnostics —
+/// would otherwise vanish. See `main::init_tracing`.
+pub fn log_path() -> PathBuf {
+    deectx_home().join("deectx.log")
+}
+
 /// Create the home directory if it does not exist.
 pub fn ensure_home() -> std::io::Result<()> {
     std::fs::create_dir_all(deectx_home())
