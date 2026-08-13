@@ -68,6 +68,7 @@ Install paths ship prebuilt binaries first (Scoop / `cargo binstall` / prebuilt 
 | `src/config.rs` | `Config` struct + TOML loading, serde defaults |
 | `src/proxy.rs` | axum routes, transparent fallback, masking walk, method-agnostic forward, rehydration, local dashboard (`GET /`, `/dashboard`, `/audit/today`) |
 | `src/dashboard.html` | Self-contained branded HTML/CSS/JS for the local dashboard; embedded via `include_str!`, polls `/stats` + `/audit/today` |
+| `src/tray/` | `mod.rs` (event loop, menu, `TrayState`), `icon.rs` (pure RGBA rendering), `proxy_handle.rs` (in-process start/stop) — Windows/macOS only, `#[cfg]`-gated out of Linux builds entirely |
 | `src/upstream.rs` | Upstream routing by API-key shape (`sk-ant-…` → Anthropic, `sk-…` → OpenAI) |
 | `src/responses_ws.rs` | `/v1/responses` WebSocket proxy (Codex / Copilot CLI) — masked + rehydrated per frame |
 | `src/sse.rs` | Streaming SSE rehydration (bounded buffers) |
@@ -154,6 +155,20 @@ hand-installed per `shims/README.md`) — since those live outside `patch_config
 entirely; leaving that plugin behind after `stop` turns "restore direct access" into "opencode
 throws on every tool call." A session that already loaded the plugin still needs a restart —
 that part can't be fixed from the filesystem side.
+
+### Tray (`src/tray/`, Windows/macOS only)
+`deectx tray` hosts the masking proxy inside the same process as the tray
+icon (`ProxyHandle` wraps `proxy::run_proxy_with_shutdown`) rather than
+spawning a separate `serve` — so "Stop Masking" from the tray closes the
+listener but keeps the icon (and the ability to "Start Masking" again)
+alive. `daemon_artifact_for` now points Windows/macOS autostart at `<exe>
+tray` instead of `<exe> serve`; Linux is untouched and gets no tray code at
+all (`#[cfg(any(target_os = "windows", target_os = "macos"))]` on the module
+in `lib.rs`, target-gated deps in `Cargo.toml`). See
+`docs/superpowers/specs/2026-08-12-tray-icon-design.md` for the full design
+and its documented limitations (no coordination between the tray's internal
+start/stop and CLI `start`/`stop` run concurrently; tray-icon/muda/tao API
+correctness verified only on Windows, not macOS).
 
 ## Conventions
 - Rust 2021, `anyhow` for errors, serde derive, chrono UTC. Tests live next to code
