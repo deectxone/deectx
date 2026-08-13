@@ -4,7 +4,11 @@ use crate::setup::Tool;
 /// Abstraction over OS process operations so the lifecycle logic is testable
 /// without spawning or killing anything.
 pub trait ProcessManager {
-    /// Spawn `<current_exe> serve` detached; return the child pid.
+    /// Spawn the resident process detached and return its pid: `<current_exe>
+    /// tray` on Windows/macOS (the icon hosts the proxy itself), `<current_exe>
+    /// serve` on Linux (no tray support). Must match what `install_daemon`
+    /// wires for next login — otherwise `start` and a fresh boot disagree about
+    /// whether this session gets a tray icon.
     fn spawn_serve(&self) -> anyhow::Result<u32>;
     /// True if a process with `pid` is currently alive.
     fn is_alive(&self, pid: u32) -> bool;
@@ -204,7 +208,11 @@ pub struct OsProcessManager;
 impl ProcessManager for OsProcessManager {
     fn spawn_serve(&self) -> anyhow::Result<u32> {
         let exe = std::env::current_exe()?;
-        let child = std::process::Command::new(exe).arg("serve").spawn()?;
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        let arg = "tray";
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let arg = "serve";
+        let child = std::process::Command::new(exe).arg(arg).spawn()?;
         Ok(child.id())
     }
 

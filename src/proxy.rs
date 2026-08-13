@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::{
     body::Bytes,
     extract::State,
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Router,
 };
@@ -206,19 +206,36 @@ async fn handle_completion(
     }
     let mut events = Vec::new();
     let out = mask_or_forward_unmasked(&st, &session, &mut events, &mut json, &body);
+    let was_masked = out != body.as_ref();
     let stream = json
         .get("stream")
         .and_then(|s| s.as_bool())
         .unwrap_or(false);
-    let resp = forward_raw(
+    let mut resp = forward_raw(
         &st,
         format,
-        headers,
+        headers.clone(),
         Bytes::from(out),
         Some(&session),
         stream,
     )
     .await;
+    // A masked request that upstream rejects with 400 is far more likely to be
+    // deeCtx corrupting something it shouldn't have touched than a genuinely
+    // malformed client request. Retry once with the untouched original body so
+    // a masking bug degrades to "this one request went out unmasked" instead
+    // of a broken coding session — logged as an error (and counted in
+    // `/stats`) so it's visible in `deectx status`/`audit` rather than
+    // silently biting the next request too.
+    if was_masked && resp.status() == StatusCode::BAD_REQUEST {
+        tracing::error!(
+            "upstream rejected a masked request with 400; retrying unmasked so traffic keeps \
+             flowing — this most likely means a masking bug corrupted the request"
+        );
+        st.stats.record_error();
+        events.clear();
+        resp = forward_raw(&st, format, headers, body.clone(), Some(&session), stream).await;
+    }
     // Streaming latency is measured in Task 3; non-stream requests buffer the
     // full body in forward_raw, so elapsed() here is the true request latency.
     let latency_ms = if stream {
@@ -349,20 +366,44 @@ async fn handle_passthrough(
         }
     }
 
+    let was_masked = out_body != body;
     // session=None: passthrough responses are returned verbatim (count_tokens
     // returns a count; other endpoints carry no placeholders to rehydrate).
-    forward(
+    let resp = forward(
         &st,
         base,
-        method,
+        method.clone(),
         &path_and_query,
-        headers,
+        headers.clone(),
         out_body,
         None,
         format,
         false,
     )
-    .await
+    .await;
+    // See handle_completion: a masked request upstream rejects with 400 is
+    // treated as a masking bug, not a bad client request — retry unmasked and
+    // log it as an error rather than breaking the tool's call.
+    if was_masked && resp.status() == StatusCode::BAD_REQUEST {
+        tracing::error!(
+            "upstream rejected a masked passthrough request with 400; retrying unmasked so \
+             traffic keeps flowing — this most likely means a masking bug corrupted the request"
+        );
+        st.stats.record_error();
+        return forward(
+            &st,
+            base,
+            method,
+            &path_and_query,
+            headers,
+            body,
+            None,
+            format,
+            false,
+        )
+        .await;
+    }
+    resp
 }
 
 /// Run `mask_walk` and re-serialize, but never let a masking bug block or
@@ -446,6 +487,20 @@ pub(crate) fn mask_walk(
                 obj.get("type").and_then(|t| t.as_str()),
                 Some("tool_use") | Some("tool_result") | Some("function")
             );
+            // Extended-thinking blocks carry a `signature` cryptographically bound
+            // to the exact `thinking` text (and `redacted_thinking` blocks carry
+            // opaque `data`). The secrets detector flags these high-entropy fields
+            // as an api_key the same way it does tool_use ids; masking either the
+            // signature or the thinking text it covers invalidates the signature,
+            // and upstream rejects the whole request with a 400. Skip the block
+            // entirely rather than trying to pick individual safe fields out of it.
+            let is_thinking_block = matches!(
+                obj.get("type").and_then(|t| t.as_str()),
+                Some("thinking") | Some("redacted_thinking")
+            );
+            if is_thinking_block {
+                return false;
+            }
             let mut changed = false;
             for (k, v) in obj.iter_mut() {
                 if is_protocol_id_field(k, owns_tool_id) {
