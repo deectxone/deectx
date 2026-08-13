@@ -54,6 +54,10 @@ enum Cmd {
     DaemonInstall,
     /// Remove the autostart daemon
     DaemonUninstall,
+    /// Windows/macOS only: show a tray icon indicating masking status, with
+    /// menu actions to open the dashboard and start/stop masking
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    Tray,
 }
 
 /// Load config if it exists, else fall back to defaults. Unlike Serve, this is
@@ -67,10 +71,19 @@ fn load_config(config: &std::path::Path) -> Result<Config> {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    if matches!(cli.cmd, Some(Cmd::Tray)) {
+        return deectx::tray::run();
+    }
+
+    tokio::runtime::Runtime::new()?.block_on(async_main(cli))
+}
+
+async fn async_main(cli: Cli) -> Result<()> {
     let pm = deectx::lifecycle::OsProcessManager;
     match cli.cmd {
         None => {
@@ -189,6 +202,10 @@ async fn main() -> Result<()> {
         Some(Cmd::DaemonUninstall) => {
             deectx::setup::uninstall_daemon()?;
             println!("autostart daemon removed");
+        }
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        Some(Cmd::Tray) => {
+            unreachable!("Cmd::Tray is handled in main() before async_main is entered")
         }
     }
     Ok(())

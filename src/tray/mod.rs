@@ -5,3 +5,10 @@
 
 pub(crate) mod icon;
 pub(crate) mod proxy_handle;
+
+/// Entry point for `deectx tray`. Owns the calling thread (the native tray
+/// event loop requires this, especially on macOS) — callers must invoke this
+/// directly from `main()`, never from inside a Tokio runtime.
+pub fn run() -> anyhow::Result<()> {
+    Ok(())
+}
