@@ -386,10 +386,10 @@ fn uninstall_at(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Install the per-OS autostart artifact pointing at the current binary
-/// running `serve`. On Linux/macOS also runs the systemd/launchctl enable
-/// commands (failures ignored — the artifact is the source of truth).
-/// Idempotent: safe to re-run.
+/// Install the per-OS autostart artifact pointing at the current binary —
+/// `serve` on Linux, `tray` on Windows/macOS. On Linux/macOS also runs the
+/// systemd/launchctl enable commands (failures ignored — the artifact is
+/// the source of truth). Idempotent: safe to re-run.
 pub fn install_daemon() -> Result<()> {
     let os = std::env::consts::OS;
     let exe = std::env::current_exe()?;
