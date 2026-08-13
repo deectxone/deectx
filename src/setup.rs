@@ -282,12 +282,15 @@ pub fn unwrap() -> Vec<(Tool, anyhow::Error)> {
     failures
 }
 
-/// Windows startup-folder batch file content: runs `<exe> serve` at login.
+/// Windows startup-folder batch file content: runs `<exe> tray` at login —
+/// the tray icon hosts the proxy itself (see `src/tray/`), so this replaces
+/// what used to be a plain `<exe> serve`.
 fn windows_batch(exe: &str) -> String {
-    format!("@echo off\r\nstart \"\" \"{exe}\" serve\r\n")
+    format!("@echo off\r\nstart \"\" \"{exe}\" tray\r\n")
 }
 
-/// macOS LaunchAgent plist content: runs `<exe> serve` at login, kept alive.
+/// macOS LaunchAgent plist content: runs `<exe> tray` at login, kept alive —
+/// same reasoning as `windows_batch`.
 fn plist_xml(exe: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -299,7 +302,7 @@ fn plist_xml(exe: &str) -> String {
     <key>ProgramArguments</key>
     <array>
         <string>{exe}</string>
-        <string>serve</string>
+        <string>tray</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -668,10 +671,17 @@ mod tests {
     }
 
     #[test]
-    fn plist_xml_contains_exe_and_serve() {
+    fn plist_xml_launches_tray_not_serve() {
         let xml = plist_xml("/usr/local/bin/deectx");
         assert!(xml.contains("<string>/usr/local/bin/deectx</string>"));
-        assert!(xml.contains("<string>serve</string>"));
+        assert!(
+            xml.contains("<string>tray</string>"),
+            "macOS autostart must launch the tray-resident mode, not headless serve: {xml}"
+        );
+        assert!(
+            !xml.contains("<string>serve</string>"),
+            "must not also launch plain serve — tray already hosts the proxy: {xml}"
+        );
         assert!(xml.contains("RunAtLoad"));
         assert!(xml.contains("com.deectx.proxy"));
     }
@@ -684,9 +694,16 @@ mod tests {
     }
 
     #[test]
-    fn windows_batch_contains_exe_and_serve() {
+    fn windows_batch_launches_tray_not_serve() {
         let batch = windows_batch("C:\\bin\\deectx.exe");
-        assert!(batch.contains("serve"));
+        assert!(
+            batch.contains("tray"),
+            "Windows autostart must launch the tray-resident mode, not headless serve: {batch}"
+        );
+        assert!(
+            !batch.contains(" serve"),
+            "must not also launch plain serve — tray already hosts the proxy: {batch}"
+        );
         assert!(batch.contains("C:\\bin\\deectx.exe"));
     }
 
@@ -708,7 +725,7 @@ mod tests {
         install_at(&path, &content).unwrap();
         assert!(path.exists(), "install must write the startup artifact");
         let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.contains("serve"));
+        assert!(written.contains("tray"));
         assert!(written.contains("C:\\bin\\deectx.exe"));
 
         uninstall_at(&path).unwrap();
