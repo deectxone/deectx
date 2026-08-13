@@ -41,6 +41,19 @@ pub(crate) enum ApiFormat {
 }
 
 pub async fn run_proxy(cfg: Config) -> Result<()> {
+    run_proxy_with_shutdown(cfg, std::future::pending()).await
+}
+
+/// Like [`run_proxy`] (binds, writes the pidfile, serves, clears the pidfile
+/// on exit), but stops as soon as `shutdown` resolves instead of running
+/// forever. Used by the tray to stop masking without exiting its process —
+/// the pidfile write/clear happens here exactly as it does for plain
+/// `serve`, so `deectx status`/`doctor` see a tray-hosted proxy the same way
+/// they'd see a standalone one.
+pub async fn run_proxy_with_shutdown(
+    cfg: Config,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<()> {
     let listener = TcpListener::bind(&cfg.listen).await?;
     let actual = listener.local_addr()?.to_string();
     tracing::info!("deectx listening on {}", actual);
@@ -52,12 +65,23 @@ pub async fn run_proxy(cfg: Config) -> Result<()> {
     if let Err(e) = pf.write() {
         tracing::warn!("could not write pidfile: {e}");
     }
-    let res = serve_with_listener(cfg, listener).await;
+    let res = serve_with_listener_and_shutdown(cfg, listener, shutdown).await;
     crate::home::Pidfile::clear();
     res
 }
 
 pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<()> {
+    serve_with_listener_and_shutdown(cfg, listener, std::future::pending()).await
+}
+
+/// Like [`serve_with_listener`], but stops serving as soon as `shutdown`
+/// resolves instead of running forever. Used by the tray (`src/tray/`) to
+/// stop masking without exiting the process it's hosting the icon in.
+pub async fn serve_with_listener_and_shutdown(
+    cfg: Config,
+    listener: TcpListener,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<()> {
     let packs = packs::load_active(&cfg);
     let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
     let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(&cfg, &packs));
@@ -104,7 +128,9 @@ pub async fn serve_with_listener(cfg: Config, listener: TcpListener) -> Result<(
             .route("/dashboard", axum::routing::get(handle_dashboard));
     }
     let app = app.fallback(handle_passthrough).with_state(state);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await?;
     Ok(())
 }
 

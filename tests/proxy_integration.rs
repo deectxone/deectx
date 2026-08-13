@@ -755,3 +755,46 @@ async fn responses_ws_masks_outbound_and_rehydrates_inbound() {
         "ledger must never store raw PII"
     );
 }
+
+#[tokio::test]
+async fn serve_with_listener_and_shutdown_stops_on_signal() {
+    let ledger_path =
+        std::env::temp_dir().join(format!("deectx_shutdown_{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&ledger_path);
+    let cfg = deectx::config::Config {
+        listen: "127.0.0.1:0".into(),
+        ledger_path,
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind(&cfg.listen).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let shutdown = async {
+        let _ = rx.await;
+    };
+    let server = tokio::spawn(deectx::proxy::serve_with_listener_and_shutdown(
+        cfg, listener, shutdown,
+    ));
+
+    // Confirm it's actually serving before asking it to stop.
+    let ok = reqwest::get(format!("http://{addr}/healthz"))
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200);
+
+    tx.send(()).unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+        .await
+        .expect("server task must finish within 5s of the shutdown signal")
+        .unwrap();
+    assert!(
+        result.is_ok(),
+        "graceful shutdown must return Ok: {result:?}"
+    );
+
+    // The listener is closed now — a fresh connection attempt must fail.
+    assert!(reqwest::get(format!("http://{addr}/healthz"))
+        .await
+        .is_err());
+}
