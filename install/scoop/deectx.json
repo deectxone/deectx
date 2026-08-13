@@ -1,5 +1,5 @@
 {
-  "version": "0.2.4",
+  "version": "0.2.5",
   "license": "Apache-2.0",
   "autoupdate": {
     "architecture": {
@@ -11,7 +11,7 @@
   "architecture": {
     "64bit": {
       "hash": "b64a304e922e2cf0bd048a08c26e2b9ebf5ae73de746418ed954b65a983fc92b",
-      "url": "https://github.com/deectxone/deectx/releases/download/v0.2.4/deectx-x86_64-pc-windows-msvc.zip"
+      "url": "https://github.com/deectxone/deectx/releases/download/v0.2.5/deectx-x86_64-pc-windows-msvc.zip"
     }
   },
   "description": "Local-first PII-masking proxy for AI coding tools",
