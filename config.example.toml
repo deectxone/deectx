@@ -9,7 +9,10 @@ ledger_path = "ledger.jsonl"
 ledger_retention_days = 90
 
 # Built-in packs: default, gdpr, cdr-au. Add packs/*.yaml and reference names here.
-active_packs = ["gdpr"]
+# `default` is always on regardless of this list. New installs default to
+# both GDPR and CDR-AU (see lifecycle::ensure_config) — toggle either one
+# live from the dashboard's Packs panel, or edit this list directly.
+active_packs = ["gdpr", "cdr-au"]
 
 # Optional: NER via a local GLiNER ONNX model in model_dir (model.onnx + tokenizer.json).
 # ner = true

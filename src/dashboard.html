@@ -191,6 +191,103 @@
     border-top: 1px solid var(--color-panel-border); padding-top: 16px;
   }
   footer.note code { font-family: var(--font-mono); }
+
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+  }
+  .section-head h2 { margin: 0; }
+  .section-controls { display: flex; align-items: center; gap: 8px; }
+  #day-select {
+    font-family: var(--font-sans); font-size: 12px; color: var(--color-ink);
+    background: var(--color-panel); border: 1px solid var(--color-panel-border);
+    border-radius: 8px; padding: 5px 8px;
+  }
+  #clear-logs-btn {
+    font-family: var(--font-sans); font-size: 12px; font-weight: 600;
+    color: var(--color-danger); background: transparent;
+    border: 1px solid var(--color-danger); border-radius: 8px;
+    padding: 5px 10px; cursor: pointer;
+  }
+  #clear-logs-btn:hover { background: color-mix(in srgb, var(--color-danger) 10%, transparent); }
+
+  .pack-toggle {
+    display: flex; align-items: center; gap: 6px;
+    font-family: var(--font-mono); font-size: 12px;
+    background: var(--color-panel); color: var(--color-ink-dim);
+    border: 1px solid var(--color-panel-border);
+    border-radius: 999px; padding: 4px 10px 4px 8px; cursor: pointer;
+    user-select: none;
+  }
+  .pack-toggle input { accent-color: var(--color-accent); cursor: pointer; }
+  .pack-toggle.active {
+    background: var(--color-accent-soft); color: var(--color-accent);
+    border-color: transparent;
+  }
+  .pack-toggle.locked { cursor: default; opacity: 0.85; }
+  #packs-save-btn {
+    font-family: var(--font-sans); font-size: 12px; font-weight: 600;
+    color: var(--color-accent); background: var(--color-accent-soft);
+    border: 1px solid transparent; border-radius: 8px;
+    padding: 5px 10px; cursor: pointer;
+  }
+  #packs-save-btn:disabled { opacity: 0.5; cursor: default; }
+  #packs-status { font-size: 12px; color: var(--color-ink-faint); }
+  .version-pill {
+    font-family: var(--font-mono); font-size: 11px; color: var(--color-ink-faint);
+  }
+
+  .preview-wrap {
+    position: relative; height: 150px; margin-bottom: 8px;
+  }
+  .preview-layer {
+    position: absolute; inset: 0; margin: 0; box-sizing: border-box;
+    padding: 12px 14px; border-radius: 12px; border: 1px solid var(--color-panel-border);
+    font-family: var(--font-mono); font-size: 13px; line-height: 1.6;
+    white-space: pre-wrap; word-wrap: break-word; overflow: auto;
+  }
+  #preview-highlight {
+    background: var(--color-panel); color: var(--color-ink); pointer-events: none;
+  }
+  #preview-input {
+    background: transparent; color: transparent; caret-color: var(--color-ink);
+    resize: vertical; border-color: transparent;
+  }
+  #preview-input:focus { outline: 2px solid var(--color-accent); outline-offset: -1px; }
+  mark.mark-mask {
+    background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+    color: inherit; border-radius: 3px; padding: 0 1px;
+  }
+  mark.mark-redact {
+    background: color-mix(in srgb, var(--color-danger) 35%, transparent);
+    color: inherit; border-radius: 3px; padding: 0 1px;
+  }
+  mark.mark-alert {
+    background: color-mix(in srgb, var(--color-warn) 40%, transparent);
+    color: inherit; border-radius: 3px; padding: 0 1px;
+  }
+  #preview-legend { display: flex; flex-wrap: wrap; gap: 6px; min-height: 22px; }
+  #preview-legend .chip { display: inline-flex; align-items: center; gap: 5px; }
+  #preview-legend .chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .tools-list { display: flex; flex-direction: column; gap: 8px; }
+  .tool-row {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--color-panel); border: 1px solid var(--color-panel-border);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px;
+  }
+  .tool-row .tool-name { font-weight: 600; color: var(--color-ink); }
+  .tool-row .tool-path {
+    font-family: var(--font-mono); font-size: 11px; color: var(--color-ink-faint);
+    margin-top: 2px;
+  }
+  .tool-badge {
+    font-size: 11px; font-weight: 600; border-radius: 999px; padding: 3px 10px;
+    white-space: nowrap;
+  }
+  .tool-badge.wired { background: var(--color-accent-soft); color: var(--color-accent); }
+  .tool-badge.not-wired { background: color-mix(in srgb, var(--color-warn) 18%, var(--color-panel)); color: var(--color-warn); }
+  .tool-badge.not-installed { background: var(--color-bg-soft); color: var(--color-ink-faint); }
 </style>
 </head>
 <body>
@@ -217,6 +314,7 @@
         </svg>
         Star on GitHub
       </a>
+      <span class="version-pill" id="app-version"></span>
       <div class="status-pill"><span class="dot"></span><span id="updated-at">connecting…</span></div>
     </div>
   </header>
@@ -237,7 +335,13 @@
   </div>
 
   <section>
-    <h2>Today</h2>
+    <div class="section-head">
+      <h2>Day</h2>
+      <div class="section-controls">
+        <select id="day-select"><option value="">Today</option></select>
+        <button id="clear-logs-btn" type="button">Clear logs</button>
+      </div>
+    </div>
     <div class="kpis">
       <div class="kpi"><div class="n" id="k-requests">–</div><div class="l">requests</div></div>
       <div class="kpi"><div class="n" id="k-masked">–</div><div class="l">masked</div></div>
@@ -259,8 +363,29 @@
   </section>
 
   <section>
-    <h2>Active packs</h2>
-    <div class="chips" id="packs-chips"><span class="empty">none reporting yet</span></div>
+    <div class="section-head">
+      <h2>Packs</h2>
+      <div class="section-controls">
+        <span id="packs-status"></span>
+        <button id="packs-save-btn" type="button" disabled>Save</button>
+      </div>
+    </div>
+    <div class="chips" id="packs-toggles"><span class="empty">loading…</span></div>
+  </section>
+
+  <section>
+    <h2>Test your prompt</h2>
+    <div class="preview-wrap">
+      <div id="preview-highlight" class="preview-layer" aria-hidden="true">&nbsp;</div>
+      <textarea id="preview-input" class="preview-layer" spellcheck="false"
+        placeholder="Paste a prompt here to see what deeCtx would mask or redact before it ever reaches the model — nothing you type here is sent upstream, logged, or leaves this machine."></textarea>
+    </div>
+    <div id="preview-legend"><span class="empty">Nothing detected yet.</span></div>
+  </section>
+
+  <section>
+    <h2>Tools tied to deeCtx</h2>
+    <div class="tools-list" id="tools-list"><div class="empty">loading…</div></div>
   </section>
 
   <footer class="note">
@@ -276,7 +401,10 @@
 (function () {
   const fmt = new Intl.NumberFormat();
   const errBanner = document.getElementById('err-banner');
+  const daySelect = document.getElementById('day-select');
+  const clearBtn = document.getElementById('clear-logs-btn');
   let sawAuditOnce = false;
+  let today = null; // local date string, e.g. "2026-08-14" — filled in by refreshDays()
 
   function showErr(msg) {
     errBanner.textContent = msg;
@@ -284,6 +412,26 @@
   }
   function clearErr() {
     errBanner.style.display = 'none';
+  }
+
+  async function refreshDays() {
+    try {
+      const res = await fetch('/audit/days', { cache: 'no-store' });
+      if (!res.ok) return;
+      const { dates } = await res.json();
+      if (!dates || dates.length === 0) return;
+      today = dates[0];
+      const selected = daySelect.value;
+      daySelect.innerHTML = dates.map(function (d, i) {
+        const label = i === 0 ? 'Today' : d;
+        return '<option value="' + d + '">' + label + '</option>';
+      }).join('');
+      if (selected && dates.includes(selected)) {
+        daySelect.value = selected;
+      }
+    } catch (e) {
+      // day list is a nice-to-have; ignore failures here, tick() still shows today
+    }
   }
 
   function renderBars(containerId, map, emptyText) {
@@ -305,14 +453,17 @@
 
   async function tick() {
     try {
+      const selectedDay = daySelect.value;
+      const isToday = !selectedDay || selectedDay === today;
+      const auditUrl = selectedDay ? '/audit/day?date=' + encodeURIComponent(selectedDay) : '/audit/today';
       const [statsRes, auditRes] = await Promise.all([
         fetch('/stats', { cache: 'no-store' }),
-        fetch('/audit/today', { cache: 'no-store' }),
+        fetch(auditUrl, { cache: 'no-store' }),
       ]);
 
       if (statsRes.ok) {
         const s = await statsRes.json();
-        document.getElementById('k-errors').textContent = fmt.format(s.errors || 0);
+        document.getElementById('k-errors').textContent = isToday ? fmt.format(s.errors || 0) : '–';
       }
 
       if (auditRes.ok) {
@@ -329,12 +480,6 @@
         document.getElementById('k-alerts').textContent = fmt.format(a.alerts || 0);
         renderBars('entities-bars', a.entities, 'No detections yet today.');
         renderBars('tools-bars', a.tools, 'No tool activity yet today.');
-
-        const packs = Object.keys(a.packs || {});
-        const chipsEl = document.getElementById('packs-chips');
-        chipsEl.innerHTML = packs.length
-          ? packs.map(function (p) { return '<span class="chip">' + p + '</span>'; }).join('')
-          : '<span class="empty">none reporting yet</span>';
       } else if (!sawAuditOnce) {
         showErr('Could not load today’s audit summary yet (' + auditRes.status + '). Live counters below still work.');
       }
@@ -348,8 +493,196 @@
     }
   }
 
+  daySelect.addEventListener('change', tick);
+
+  clearBtn.addEventListener('click', async function () {
+    if (!confirm('Delete all deeCtx logs and start tracking from now? This cannot be undone.')) {
+      return;
+    }
+    try {
+      const res = await fetch('/audit/clear', { method: 'POST' });
+      if (!res.ok) {
+        showErr('Could not clear logs (' + res.status + ').');
+        return;
+      }
+      daySelect.value = '';
+      await refreshDays();
+      await tick();
+    } catch (e) {
+      showErr('Could not clear logs — is the deeCtx proxy still running?');
+    }
+  });
+
+  const packsToggles = document.getElementById('packs-toggles');
+  const packsSaveBtn = document.getElementById('packs-save-btn');
+  const packsStatus = document.getElementById('packs-status');
+  let dirtyPacks = false;
+
+  function renderPacks(packs) {
+    packsToggles.innerHTML = packs.map(function (p) {
+      const cls = 'pack-toggle' + (p.active ? ' active' : '') + (p.locked ? ' locked' : '');
+      const disabled = p.locked ? 'disabled' : '';
+      const checked = p.active ? 'checked' : '';
+      return '<label class="' + cls + '" title="' + p.description + '">' +
+        '<input type="checkbox" data-pack="' + p.name + '" ' + checked + ' ' + disabled + '>' +
+        p.name + '</label>';
+    }).join('');
+    packsToggles.querySelectorAll('input[type=checkbox]:not([disabled])').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        cb.closest('.pack-toggle').classList.toggle('active', cb.checked);
+        dirtyPacks = true;
+        packsSaveBtn.disabled = false;
+        packsStatus.textContent = 'unsaved changes';
+      });
+    });
+  }
+
+  async function loadPacks() {
+    if (dirtyPacks) return; // don't clobber an in-progress edit on the 5s poll
+    try {
+      const res = await fetch('/packs', { cache: 'no-store' });
+      if (!res.ok) return;
+      const { packs } = await res.json();
+      renderPacks(packs || []);
+    } catch (e) {
+      // packs panel is a nice-to-have; ignore failures here
+    }
+  }
+
+  packsSaveBtn.addEventListener('click', async function () {
+    const active = Array.from(packsToggles.querySelectorAll('input[type=checkbox]:checked'))
+      .map(function (cb) { return cb.dataset.pack; });
+    packsSaveBtn.disabled = true;
+    packsStatus.textContent = 'saving…';
+    try {
+      const res = await fetch('/packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active_packs: active }),
+      });
+      if (!res.ok) {
+        packsStatus.textContent = 'save failed (' + res.status + ')';
+        packsSaveBtn.disabled = false;
+        return;
+      }
+      const { packs } = await res.json();
+      dirtyPacks = false;
+      renderPacks(packs || []);
+      packsStatus.textContent = 'saved — applied immediately, no restart needed';
+    } catch (e) {
+      packsStatus.textContent = 'save failed — is the deeCtx proxy still running?';
+      packsSaveBtn.disabled = false;
+    }
+  });
+
+  const previewInput = document.getElementById('preview-input');
+  const previewHighlight = document.getElementById('preview-highlight');
+  const previewLegend = document.getElementById('preview-legend');
+  let previewDebounce = null;
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // Span offsets from /preview are UTF-8 byte offsets (Rust &str indices),
+  // but JS strings are UTF-16 — slice on the encoded bytes, not the string,
+  // so multi-byte characters (accents, emoji, …) before a match don't shift
+  // every highlight after them out of alignment.
+  function renderPreview(text, spans) {
+    const bytes = new TextEncoder().encode(text);
+    const dec = new TextDecoder();
+    const sorted = spans.slice().sort(function (a, b) { return a.start - b.start; });
+    let html = '';
+    let pos = 0;
+    const counts = {};
+    for (const s of sorted) {
+      if (s.start < pos || s.end > bytes.length) continue;
+      html += escapeHtml(dec.decode(bytes.slice(pos, s.start)));
+      const cls = s.action === 'redact' ? 'mark-redact' : (s.alert ? 'mark-alert' : 'mark-mask');
+      const title = s.entity + ' · ' + s.action + (s.alert ? ' · alert' : '');
+      html += '<mark class="' + cls + '" title="' + escapeHtml(title) + '">' +
+        escapeHtml(dec.decode(bytes.slice(s.start, s.end))) + '</mark>';
+      pos = s.end;
+      counts[s.entity] = (counts[s.entity] || 0) + 1;
+    }
+    html += escapeHtml(dec.decode(bytes.slice(pos)));
+    previewHighlight.innerHTML = html.length ? html + '\n' : '&nbsp;';
+
+    const entries = Object.entries(counts);
+    previewLegend.innerHTML = entries.length
+      ? entries.map(function (e) {
+          return '<span class="chip">' + e[0] + ' × ' + e[1] + '</span>';
+        }).join('')
+      : '<span class="empty">Nothing detected' + (text ? ' in this prompt.' : ' yet.') + '</span>';
+  }
+
+  async function runPreview() {
+    const text = previewInput.value;
+    if (!text) {
+      renderPreview('', []);
+      return;
+    }
+    try {
+      const res = await fetch('/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) return;
+      const { spans } = await res.json();
+      // Stale-response guard: only paint if the box still holds this text.
+      if (previewInput.value === text) renderPreview(text, spans || []);
+    } catch (e) {
+      // preview is a nice-to-have; ignore failures here
+    }
+  }
+
+  previewInput.addEventListener('input', function () {
+    clearTimeout(previewDebounce);
+    previewDebounce = setTimeout(runPreview, 300);
+  });
+  previewInput.addEventListener('scroll', function () {
+    previewHighlight.scrollTop = previewInput.scrollTop;
+    previewHighlight.scrollLeft = previewInput.scrollLeft;
+  });
+
+  async function loadTools() {
+    const el = document.getElementById('tools-list');
+    try {
+      const res = await fetch('/tools', { cache: 'no-store' });
+      if (!res.ok) return;
+      const { tools } = await res.json();
+      el.innerHTML = (tools || []).map(function (t) {
+        const badge = !t.installed
+          ? '<span class="tool-badge not-installed">not detected</span>'
+          : t.wired
+            ? '<span class="tool-badge wired">wired to deeCtx</span>'
+            : '<span class="tool-badge not-wired">installed, not wired</span>';
+        const path = t.config_path ? '<div class="tool-path">' + t.config_path + '</div>' : '';
+        return '<div class="tool-row"><div><div class="tool-name">' + t.name + '</div>' + path + '</div>' + badge + '</div>';
+      }).join('') || '<div class="empty">no tools found</div>';
+    } catch (e) {
+      // tools panel is a nice-to-have; ignore failures here
+    }
+  }
+
+  async function loadVersion() {
+    try {
+      const res = await fetch('/version', { cache: 'no-store' });
+      if (!res.ok) return;
+      const { version } = await res.json();
+      if (version) document.getElementById('app-version').textContent = 'v' + version;
+    } catch (e) {
+      // version pill is a nice-to-have; ignore failures here
+    }
+  }
+
+  refreshDays();
   tick();
-  setInterval(tick, 5000);
+  loadPacks();
+  loadVersion();
+  loadTools();
+  setInterval(function () { refreshDays(); tick(); loadPacks(); }, 5000);
 })();
 </script>
 </body>

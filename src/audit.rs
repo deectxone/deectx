@@ -57,7 +57,7 @@ pub fn summarize_for_date(
     let entries = Ledger::read_all(ledger_path)?;
     let filtered: Vec<LedgerEntry> = entries
         .into_iter()
-        .filter(|e| e.ts.date_naive() == date)
+        .filter(|e| crate::ledger::local_date(e.ts) == date)
         .collect();
     Ok(summarize(&filtered, &date.to_string()))
 }
@@ -134,7 +134,7 @@ mod tests {
         ledger
             .append(&sample_entry(-1, "yesterday", &["default"], vec![]))
             .unwrap();
-        let today = Utc::now().date_naive();
+        let today = crate::ledger::local_date(Utc::now());
         let summary = summarize_for_date(&path, today).unwrap();
         assert_eq!(summary.total_requests, 1);
         assert_eq!(summary.tools.get("today"), Some(&1));

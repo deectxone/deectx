@@ -57,6 +57,16 @@ impl LiveStats {
             errors: self.errors.load(Ordering::Relaxed),
         }
     }
+
+    /// Zero every counter — used by the dashboard's "clear logs" action so
+    /// the live/session tiles match the freshly-wiped ledger.
+    pub fn reset(&self) {
+        self.requests.store(0, Ordering::Relaxed);
+        self.masked.store(0, Ordering::Relaxed);
+        self.redacted.store(0, Ordering::Relaxed);
+        self.alerts.store(0, Ordering::Relaxed);
+        self.errors.store(0, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]

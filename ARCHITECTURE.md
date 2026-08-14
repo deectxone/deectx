@@ -225,7 +225,7 @@ What it does NOT do:
 | `upstream_anthropic` | `https://api.anthropic.com` | Anthropic-style upstream. |
 | `ledger_path` | `./ledger.jsonl` | Ledger base path. |
 | `ledger_retention_days` | `90` | Days to keep rotated ledger files. |
-| `active_packs` | `[]` | Built-in pack names to enable. |
+| `active_packs` | `[]` (struct default); `["gdpr", "cdr-au"]` in the config a fresh install writes (`lifecycle::ensure_config`) | Built-in pack names to enable, beyond the mandatory `default` pack. Toggleable live from the dashboard's Packs panel (`POST /packs`), which persists back to this field. |
 | `packs_dir` | none | Directory of custom packs. |
 | `model_dir` | `./models` | GLiNER ONNX model dir (`model.onnx` + `tokenizer.json`). |
 | `allowlist` | `[]` | Values never masked (case-insensitive). |

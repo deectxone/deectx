@@ -66,8 +66,8 @@ Install paths ship prebuilt binaries first (Scoop / `cargo binstall` / prebuilt 
 | `src/lifecycle.rs` | `start`/`stop`/`uninstall`/`status` + `StatusReport`/`render_status`; `ProcessManager` trait (+ `OsProcessManager`) |
 | `src/home.rs` | Runtime home `~/.deectx/` (config/ledger/pidfile paths) + `Pidfile` |
 | `src/config.rs` | `Config` struct + TOML loading, serde defaults |
-| `src/proxy.rs` | axum routes, transparent fallback, masking walk, method-agnostic forward, rehydration, local dashboard (`GET /`, `/dashboard`, `/audit/today`) |
-| `src/dashboard.html` | Self-contained branded HTML/CSS/JS for the local dashboard; embedded via `include_str!`, polls `/stats` + `/audit/today` |
+| `src/proxy.rs` | axum routes, transparent fallback, masking walk, method-agnostic forward, rehydration, local dashboard + its `/audit/*`, `/packs`, `/preview`, `/tools`, `/version` endpoints |
+| `src/dashboard.html` | Self-contained branded HTML/CSS/JS for the local dashboard; embedded via `include_str!`, polls `/stats` + `/audit/day(s)`, live-toggles packs via `/packs`, highlights detections via `/preview` |
 | `src/tray/` | `mod.rs` (event loop, menu, `TrayState`), `icon.rs` (pure RGBA rendering), `proxy_handle.rs` (in-process start/stop) — Windows/macOS only, `#[cfg]`-gated out of Linux builds entirely |
 | `src/upstream.rs` | Upstream routing by API-key shape (`sk-ant-…` → Anthropic, `sk-…` → OpenAI) |
 | `src/responses_ws.rs` | `/v1/responses` WebSocket proxy (Codex / Copilot CLI) — masked + rehydrated per frame |
@@ -124,11 +124,22 @@ Stores only hashes — never raw PII. `LedgerEvent{entity, placeholder, ph_hash,
 `audit --today`) can re-read today's entries without duplicating it.
 
 ### Proxy (`src/proxy.rs`, `src/upstream.rs`, `src/responses_ws.rs`)
-Routes: `GET /healthz`, `GET /stats`, `GET /audit/today` (today's hash-only `AuditSummary` as
-JSON), `GET /` + `GET /dashboard` (local dashboard, `src/dashboard.html`), `POST
-/v1/chat/completions` (OpenAI), `POST /v1/messages` (Anthropic), the `/v1/responses` WebSocket,
-and a **catch-all `fallback`** (`handle_passthrough`) for everything else. `/stats`,
-`/audit/today`, and the dashboard are only mounted when `stats_enabled`.
+Routes: `GET /healthz`, `GET /stats`, `GET /audit/today` + `GET /audit/day?date=YYYY-MM-DD`
+(hash-only `AuditSummary` as JSON, local-calendar-day boundaries via `ledger::local_date`),
+`GET /audit/days` (available ledger dates for the dashboard's day picker), `POST /audit/clear`
+(wipes the ledger + resets `LiveStats`), `GET /packs` + `POST /packs` (which packs are active;
+POST persists `active_packs` to `config.toml` via `config::write_active_packs` and hot-swaps a
+freshly-built `PackRuntime` into `AppState.runtime`, no restart needed), `POST /preview` (dry-run
+detection over arbitrary text for the dashboard's "Test your prompt" box — never touches the
+ledger/stats), `GET /tools` (which locally-installed AI tools are wired, same check as `deectx
+doctor`), `GET /version`, `GET /` + `GET /dashboard` (local dashboard, `src/dashboard.html`),
+`POST /v1/chat/completions` (OpenAI), `POST /v1/messages` (Anthropic), the `/v1/responses`
+WebSocket, and a **catch-all `fallback`** (`handle_passthrough`) for everything else. All of the
+above except the completion/passthrough routes are only mounted when `stats_enabled`.
+
+`AppState.runtime: RwLock<PackRuntime>` holds the pack-dependent pipeline (`chain`, `packs`,
+`allowlist`, `fail_closed`) so `POST /packs` can rebuild and swap it without restarting the proxy
+or interrupting in-flight requests; `build_pack_runtime(cfg)` is the shared constructor.
 `passthrough_should_mask` masks prompt-bearing endpoints (`/v1/messages/count_tokens`) via the
 same `mask_walk`; other paths (`/v1/models`, …) forward verbatim. Completions and passthrough
 share the method-agnostic `forward`. Streams via `SseRehydrator`; non-streams rehydrated via

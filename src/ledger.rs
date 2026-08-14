@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -25,6 +25,14 @@ pub struct LedgerEntry {
     pub packs: Vec<String>,
 }
 
+/// The calendar day a UTC timestamp falls on in the machine's local timezone.
+/// Ledger rotation, pruning, and audit filtering all bucket by this rather
+/// than the UTC date, so "today" on the dashboard matches the user's actual
+/// day instead of rolling over at UTC midnight.
+pub fn local_date(ts: DateTime<Utc>) -> NaiveDate {
+    ts.with_timezone(&Local).date_naive()
+}
+
 pub struct Ledger {
     base: PathBuf,
     file: Mutex<Option<File>>,
@@ -45,7 +53,7 @@ impl Ledger {
         let ledger = Self {
             base: path,
             file: Mutex::new(Some(file)),
-            current_date: Mutex::new(Utc::now().date_naive()),
+            current_date: Mutex::new(local_date(Utc::now())),
             retention_days,
         };
         ledger.prune_old()?;
@@ -53,7 +61,7 @@ impl Ledger {
     }
 
     pub fn append(&self, entry: &LedgerEntry) -> io::Result<()> {
-        let entry_date = entry.ts.date_naive();
+        let entry_date = local_date(entry.ts);
         let mut cur = self.current_date.lock().unwrap_or_else(|p| p.into_inner());
         // Forward rollover: base holds the previous date, so rotate it aside and
         // start a fresh base for the new date.
@@ -109,7 +117,7 @@ impl Ledger {
             .unwrap_or("ledger")
             .to_string();
         let dir = self.base.parent().unwrap_or(Path::new("."));
-        let today = Utc::now().date_naive();
+        let today = local_date(Utc::now());
         for entry in std::fs::read_dir(dir)? {
             let path = entry?.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -125,6 +133,65 @@ impl Ledger {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Local calendar days that have a ledger file on disk (rotated dated
+    /// files plus today's base, if it has been created), most recent first.
+    /// Backs the dashboard's day picker.
+    pub fn available_dates(&self) -> io::Result<Vec<NaiveDate>> {
+        let stem = self
+            .base
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("ledger")
+            .to_string();
+        let dir = self.base.parent().unwrap_or(Path::new("."));
+        let mut dates = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if let Some(rest) = name.strip_prefix(&format!("{stem}-")) {
+                if let Some(date_str) = rest.strip_suffix(".jsonl") {
+                    if let Ok(date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                        dates.push(date);
+                    }
+                }
+            }
+        }
+        if self.base.exists() {
+            dates.push(local_date(Utc::now()));
+        }
+        dates.sort();
+        dates.dedup();
+        dates.reverse();
+        Ok(dates)
+    }
+
+    /// Delete every ledger file (base + rotated dated files) and start a
+    /// fresh, empty base file. Used by the dashboard's "clear logs" action.
+    pub fn clear_all(&self) -> io::Result<()> {
+        let stem = self
+            .base
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("ledger")
+            .to_string();
+        let dir = self.base.parent().unwrap_or(Path::new("."));
+        self.file.lock().unwrap_or_else(|p| p.into_inner()).take();
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with(&stem) && name.ends_with(".jsonl") {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        let f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.base)?;
+        *self.file.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
+        *self.current_date.lock().unwrap_or_else(|p| p.into_inner()) = local_date(Utc::now());
         Ok(())
     }
 
@@ -245,7 +312,7 @@ mod tests {
             })
             .unwrap();
 
-        let rotated = dir.join(format!("ledger-{}.jsonl", yesterday.format("%Y-%m-%d")));
+        let rotated = dir.join(format!("ledger-{}.jsonl", local_date(yesterday).format("%Y-%m-%d")));
         assert!(
             rotated.exists(),
             "yesterday entries must be rotated to a dated file"
@@ -271,7 +338,7 @@ mod tests {
         std::fs::write(&old, "").unwrap();
         let recent = dir.join(format!(
             "ledger-{}.jsonl",
-            Utc::now().date_naive().format("%Y-%m-%d")
+            local_date(Utc::now()).format("%Y-%m-%d")
         ));
         std::fs::write(&recent, "").unwrap();
 
@@ -309,11 +376,11 @@ mod tests {
 
         let today_file = dir.join(format!(
             "ledger-{}.jsonl",
-            today.date_naive().format("%Y-%m-%d")
+            local_date(today).format("%Y-%m-%d")
         ));
         let yesterday_file = dir.join(format!(
             "ledger-{}.jsonl",
-            yesterday.date_naive().format("%Y-%m-%d")
+            local_date(yesterday).format("%Y-%m-%d")
         ));
         assert!(base.exists(), "current base must still exist");
         assert!(

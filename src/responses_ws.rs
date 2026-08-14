@@ -20,19 +20,12 @@ static CONN_ID: AtomicU64 = AtomicU64::new(0);
 /// at connection close still runs even if the threshold is never crossed.
 const LEDGER_FLUSH_THRESHOLD: usize = 100;
 
-/// True when the fail-closed gate must refuse the request: a pack opts into
-/// fail-closed enforcement and a required detector (e.g. the NER model) is not
-/// ready, so masking cannot be guaranteed and traffic must not flow unmasked.
-fn fail_closed_refuses(st: &AppState) -> bool {
-    st.fail_closed && !st.chain.ready()
-}
-
 pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,
     State(st): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Response {
-    if fail_closed_refuses(&st) {
+    if crate::proxy::pack_runtime_blocked(&st) {
         tracing::warn!("failClosed enforcement: a required detector (NER model) is unavailable; refusing WebSocket upgrade");
         return Response::builder()
             .status(503)
@@ -135,7 +128,7 @@ fn flush_ledger(st: &AppState, session: &str, events: &mut Vec<LedgerEvent>) {
         session: session.to_string(),
         events: std::mem::take(events),
         latency_ms: 0,
-        packs: st.packs.clone(),
+        packs: st.runtime.read().unwrap().packs.clone(),
     };
     if let Err(e) = st.ledger.append(&entry) {
         tracing::warn!("ledger append failed: {e}");
@@ -251,6 +244,17 @@ mod tests {
         let packs = packs::load_active(&cfg);
         let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
         let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(&cfg, &packs));
+        let chain = packs::build_chain(
+            &packs,
+            ner,
+            std::path::PathBuf::from("./definitely-missing-models"),
+        );
+        let runtime = crate::proxy::PackRuntime {
+            chain,
+            packs: pack_names,
+            allowlist,
+            fail_closed,
+        };
         Arc::new(AppState {
             upstream: cfg.upstream.trim_end_matches('/').to_string(),
             anthropic_upstream: cfg
@@ -258,17 +262,11 @@ mod tests {
                 .clone()
                 .unwrap_or_else(|| "https://api.anthropic.com".to_string()),
             upstream_responses: cfg.upstream_responses.clone(),
-            chain: packs::build_chain(
-                &packs,
-                ner,
-                std::path::PathBuf::from("./definitely-missing-models"),
-            ),
+            runtime: std::sync::RwLock::new(runtime),
             masker: Arc::new(Masker::new()),
-            ledger: Ledger::new(cfg.ledger_path, cfg.ledger_retention_days).unwrap(),
+            ledger: Ledger::new(cfg.ledger_path.clone(), cfg.ledger_retention_days).unwrap(),
             http: reqwest::Client::new(),
-            packs: pack_names,
-            allowlist,
-            fail_closed,
+            cfg,
             stats: Arc::new(LiveStats::new()),
         })
     }
@@ -277,24 +275,27 @@ mod tests {
     fn fail_closed_gate_refuses_non_ready_chain() {
         let not_ready = test_state_with(true, true);
         assert!(
-            !not_ready.chain.ready(),
+            !not_ready.runtime.read().unwrap().chain.ready(),
             "ner:true with a missing model dir must leave the chain not-ready"
         );
         assert!(
-            fail_closed_refuses(&not_ready),
+            crate::proxy::pack_runtime_blocked(&not_ready),
             "fail_closed with a non-ready chain must refuse (503)"
         );
 
         let ready = test_state_with(false, true);
-        assert!(ready.chain.ready(), "ner:false keeps the chain ready");
         assert!(
-            !fail_closed_refuses(&ready),
+            ready.runtime.read().unwrap().chain.ready(),
+            "ner:false keeps the chain ready"
+        );
+        assert!(
+            !crate::proxy::pack_runtime_blocked(&ready),
             "fail_closed must not fire when the chain is ready"
         );
 
         let fail_open = test_state_with(true, false);
         assert!(
-            !fail_closed_refuses(&fail_open),
+            !crate::proxy::pack_runtime_blocked(&fail_open),
             "non-fail-closed must not refuse even when not ready"
         );
     }

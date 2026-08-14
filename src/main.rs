@@ -145,6 +145,11 @@ async fn async_main(cli: Cli) -> Result<()> {
             let warnings = deectx::lifecycle::stop(&pm)?;
             if warnings.is_empty() {
                 println!("deeCtx stopped; tools restored to direct API access.");
+                println!(
+                    "If you have an AI CLI session already running (e.g. Claude Code), restart \
+                     it now — it may have cached the proxy URL at startup and won't notice the \
+                     config was restored until it's relaunched."
+                );
             } else {
                 println!("deeCtx stopped, but some tools were NOT restored:");
                 for w in &warnings {
@@ -188,7 +193,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             let summary = if today {
                 deectx::audit::summarize_for_date(
                     &cfg.ledger_path,
-                    chrono::Utc::now().date_naive(),
+                    deectx::ledger::local_date(chrono::Utc::now()),
                 )?
             } else {
                 let entries = deectx::ledger::Ledger::read_all(&cfg.ledger_path)?;

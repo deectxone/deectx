@@ -17,20 +17,53 @@ use axum::{
 };
 use chrono::Utc;
 use futures_util::StreamExt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::net::TcpListener;
+
+/// The parts of the masking pipeline that depend on which packs are active.
+/// Held behind a lock so `POST /packs` can swap in a freshly-built chain
+/// without restarting the proxy or interrupting in-flight requests.
+pub(crate) struct PackRuntime {
+    pub(crate) chain: DetectorChain,
+    pub(crate) packs: Vec<String>,
+    pub(crate) allowlist: crate::allowlist::Allowlist,
+    pub(crate) fail_closed: bool,
+}
+
+/// Build a [`PackRuntime`] from `cfg.active_packs` (plus the mandatory
+/// `default` pack and any packs in `cfg.packs_dir`). Shared by initial
+/// startup and by `POST /packs` reloading with a different active set.
+fn build_pack_runtime(cfg: &Config) -> PackRuntime {
+    let packs = packs::load_active(cfg);
+    let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
+    let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(cfg, &packs));
+    let fail_closed = packs.iter().any(|p| p.settings.fail_closed);
+    let chain = packs::build_chain(
+        &packs,
+        cfg.ner,
+        cfg.model_dir
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from("./models")),
+    );
+    PackRuntime {
+        chain,
+        packs: pack_names,
+        allowlist,
+        fail_closed,
+    }
+}
 
 pub(crate) struct AppState {
     pub(crate) upstream: String,
     pub(crate) anthropic_upstream: String,
     pub(crate) upstream_responses: String,
-    pub(crate) chain: DetectorChain,
+    pub(crate) runtime: RwLock<PackRuntime>,
     pub(crate) masker: std::sync::Arc<Masker>,
     pub(crate) ledger: Ledger,
     pub(crate) http: reqwest::Client,
-    pub(crate) packs: Vec<String>,
-    pub(crate) allowlist: crate::allowlist::Allowlist,
-    pub(crate) fail_closed: bool,
+    /// Snapshot of the config the proxy was started with — reused as the base
+    /// when `POST /packs` rebuilds the runtime with a new `active_packs`.
+    pub(crate) cfg: Config,
     pub(crate) stats: std::sync::Arc<LiveStats>,
 }
 
@@ -99,31 +132,21 @@ pub async fn serve_with_listener_and_shutdown(
     listener: TcpListener,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
-    let packs = packs::load_active(&cfg);
-    let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
-    let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(&cfg, &packs));
     let stats_enabled = cfg.stats_enabled;
     let anthropic_upstream = cfg
         .upstream_anthropic
         .clone()
         .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+    let runtime = build_pack_runtime(&cfg);
     let state = Arc::new(AppState {
         upstream: cfg.upstream.trim_end_matches('/').to_string(),
         anthropic_upstream,
         upstream_responses: cfg.upstream_responses.clone(),
-        chain: packs::build_chain(
-            &packs,
-            cfg.ner,
-            cfg.model_dir
-                .clone()
-                .unwrap_or_else(|| std::path::PathBuf::from("./models")),
-        ),
+        runtime: RwLock::new(runtime),
         masker: std::sync::Arc::new(Masker::new()),
-        ledger: Ledger::new(cfg.ledger_path, cfg.ledger_retention_days)?,
+        ledger: Ledger::new(cfg.ledger_path.clone(), cfg.ledger_retention_days)?,
         http: reqwest::Client::new(),
-        packs: pack_names,
-        allowlist,
-        fail_closed: packs.iter().any(|p| p.settings.fail_closed),
+        cfg,
         stats: std::sync::Arc::new(LiveStats::new()),
     });
     let mut app = Router::new()
@@ -141,6 +164,16 @@ pub async fn serve_with_listener_and_shutdown(
         app = app
             .route("/stats", axum::routing::get(handle_stats))
             .route("/audit/today", axum::routing::get(handle_audit_today))
+            .route("/audit/day", axum::routing::get(handle_audit_day))
+            .route("/audit/days", axum::routing::get(handle_audit_days))
+            .route("/audit/clear", axum::routing::post(handle_audit_clear))
+            .route(
+                "/packs",
+                axum::routing::get(handle_packs_get).post(handle_packs_post),
+            )
+            .route("/preview", axum::routing::post(handle_preview))
+            .route("/tools", axum::routing::get(handle_tools))
+            .route("/version", axum::routing::get(handle_version))
             .route("/", axum::routing::get(handle_dashboard))
             .route("/dashboard", axum::routing::get(handle_dashboard));
     }
@@ -195,7 +228,7 @@ async fn handle_completion(
         Err(_) => return forward_raw(&st, format, headers, body, None, false).await,
     };
     let session = session_id(&json);
-    if st.fail_closed && !st.chain.ready() {
+    if pack_runtime_blocked(&st) {
         tracing::warn!("failClosed enforcement: a required detector (NER model) is unavailable; refusing request");
         return Response::builder()
             .status(503)
@@ -249,7 +282,7 @@ async fn handle_completion(
         session: session.clone(),
         events,
         latency_ms,
-        packs: st.packs.clone(),
+        packs: st.runtime.read().unwrap().packs.clone(),
     };
     if let Err(e) = st.ledger.append(&entry) {
         tracing::warn!("ledger append failed: {e}");
@@ -266,17 +299,224 @@ async fn handle_stats(State(st): State<Arc<AppState>>) -> axum::Json<crate::stat
 /// audit --today` prints. Never the masked values themselves: the ledger
 /// never stores raw PII, so there is nothing more revealing to serve.
 async fn handle_audit_today(State(st): State<Arc<AppState>>) -> Response {
-    let today = Utc::now().date_naive();
-    match crate::audit::summarize_for_date(st.ledger.path(), today) {
+    let today = crate::ledger::local_date(Utc::now());
+    audit_response(&st, today)
+}
+
+/// A specific local calendar day's ledger summary, e.g. `/audit/day?date=2026-08-13`
+/// — backs the dashboard's day picker. Same shape/semantics as
+/// [`handle_audit_today`], just for an arbitrary day instead of today.
+async fn handle_audit_day(
+    State(st): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let Some(date_str) = params.get("date") else {
+        return Response::builder()
+            .status(400)
+            .body(Body::from("deeCtx: missing ?date=YYYY-MM-DD"))
+            .unwrap();
+    };
+    match chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+        Ok(date) => audit_response(&st, date),
+        Err(_) => Response::builder()
+            .status(400)
+            .body(Body::from("deeCtx: invalid date, expected YYYY-MM-DD"))
+            .unwrap(),
+    }
+}
+
+fn audit_response(st: &AppState, date: chrono::NaiveDate) -> Response {
+    match crate::audit::summarize_for_date(st.ledger.path(), date) {
         Ok(summary) => axum::Json(summary).into_response(),
         Err(e) => {
-            tracing::warn!("dashboard: could not read today's audit summary: {e}");
+            tracing::warn!("dashboard: could not read audit summary for {date}: {e}");
             Response::builder()
                 .status(500)
-                .body(Body::from("deeCtx: could not read today's audit summary"))
+                .body(Body::from("deeCtx: could not read audit summary"))
                 .unwrap()
         }
     }
+}
+
+/// The local calendar days that have ledger data on disk, most recent first
+/// — populates the dashboard's day picker.
+async fn handle_audit_days(State(st): State<Arc<AppState>>) -> Response {
+    match st.ledger.available_dates() {
+        Ok(dates) => {
+            let dates: Vec<String> = dates.iter().map(|d| d.to_string()).collect();
+            axum::Json(serde_json::json!({ "dates": dates })).into_response()
+        }
+        Err(e) => {
+            tracing::warn!("dashboard: could not list ledger dates: {e}");
+            Response::builder()
+                .status(500)
+                .body(Body::from("deeCtx: could not list ledger dates"))
+                .unwrap()
+        }
+    }
+}
+
+/// Wipes all ledger files and resets the live counters — the dashboard's
+/// "clear logs" action, for starting a fresh tracking window on demand.
+async fn handle_audit_clear(State(st): State<Arc<AppState>>) -> Response {
+    match st.ledger.clear_all() {
+        Ok(()) => {
+            st.stats.reset();
+            axum::Json(serde_json::json!({ "cleared": true })).into_response()
+        }
+        Err(e) => {
+            tracing::warn!("dashboard: could not clear ledger: {e}");
+            Response::builder()
+                .status(500)
+                .body(Body::from("deeCtx: could not clear ledger"))
+                .unwrap()
+        }
+    }
+}
+
+/// Which packs are currently active, plus every pack the dashboard can toggle
+/// on. `default` is always active and cannot be turned off — it's loaded
+/// unconditionally by [`packs::load_active`].
+async fn handle_packs_get(State(st): State<Arc<AppState>>) -> Response {
+    let active: std::collections::HashSet<String> =
+        st.runtime.read().unwrap().packs.iter().cloned().collect();
+    let catalog = [
+        ("default", "Baseline PII detectors — always on"),
+        ("gdpr", "GDPR-relevant entities (IBAN, EU-style PII)"),
+        ("cdr-au", "Australian Consumer Data Right entities"),
+    ];
+    let packs: Vec<serde_json::Value> = catalog
+        .iter()
+        .map(|(name, description)| {
+            serde_json::json!({
+                "name": name,
+                "description": description,
+                "active": active.contains(*name),
+                "locked": *name == "default",
+            })
+        })
+        .collect();
+    axum::Json(serde_json::json!({ "packs": packs })).into_response()
+}
+
+/// Sets which packs are active from the dashboard: persists `active_packs` to
+/// `config.toml` (so it survives a restart) and immediately swaps in a
+/// freshly-built [`PackRuntime`] — no restart needed for the change to take
+/// effect on the next request.
+async fn handle_packs_post(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        active_packs: Vec<String>,
+    }
+    let req: Req = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => {
+            return Response::builder()
+                .status(400)
+                .body(Body::from(
+                    "deeCtx: expected JSON body {\"active_packs\": [\"gdpr\", ...]}",
+                ))
+                .unwrap()
+        }
+    };
+    // Only known, toggleable built-in packs are accepted — "default" is
+    // implicit and unrecognized names are silently dropped rather than
+    // erroring, so a stale/typo'd entry in the request never blocks the rest.
+    let known = ["gdpr", "cdr-au"];
+    let filtered: Vec<String> = req
+        .active_packs
+        .into_iter()
+        .filter(|p| known.contains(&p.as_str()))
+        .collect();
+
+    if let Err(e) = crate::config::write_active_packs(&crate::home::config_path(), &filtered) {
+        tracing::warn!("could not persist active_packs to config.toml: {e}");
+        return Response::builder()
+            .status(500)
+            .body(Body::from("deeCtx: could not save config"))
+            .unwrap();
+    }
+
+    let mut cfg = st.cfg.clone();
+    cfg.active_packs = filtered;
+    let runtime = build_pack_runtime(&cfg);
+    *st.runtime.write().unwrap() = runtime;
+
+    handle_packs_get(State(st)).await
+}
+
+/// The running binary's version — lets the dashboard show what's actually
+/// deployed without the user having to run `deectx --version` separately.
+async fn handle_version() -> Response {
+    axum::Json(serde_json::json!({ "version": env!("CARGO_PKG_VERSION") })).into_response()
+}
+
+/// Dry-run detection for the dashboard's "Test your prompt" box: runs the
+/// active packs' detectors over arbitrary text and returns the spans that
+/// would be masked/redacted, so the user can see risk before ever sending it
+/// anywhere. Unlike real traffic, this never touches the ledger or `/stats`
+/// counters and never leaves the machine — it's a preview, not a request.
+async fn handle_preview(State(st): State<Arc<AppState>>, body: Bytes) -> Response {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        text: String,
+    }
+    let req: Req = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(_) => {
+            return Response::builder()
+                .status(400)
+                .body(Body::from("deeCtx: expected JSON body {\"text\": \"...\"}"))
+                .unwrap()
+        }
+    };
+    let rt = st.runtime.read().unwrap();
+    let spans = rt.allowlist.filter(rt.chain.detect(&req.text));
+    let out: Vec<serde_json::Value> = spans
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "start": s.start,
+                "end": s.end,
+                "entity": s.entity,
+                "action": match s.action {
+                    Action::Mask => "mask",
+                    Action::Redact => "redact",
+                },
+                "alert": s.alert,
+            })
+        })
+        .collect();
+    axum::Json(serde_json::json!({ "spans": out })).into_response()
+}
+
+/// Every AI tool deeCtx knows how to wire, and whether each one is currently
+/// installed and pointed at this proxy — the same check as `deectx doctor`,
+/// for the dashboard. Unlike `setup::discover()` (which only lists tools
+/// whose config file exists), this always reports all three so "not
+/// installed" and "installed but not wired" read differently to the user.
+async fn handle_tools() -> Response {
+    use crate::setup::Tool;
+    let tools: Vec<serde_json::Value> = [Tool::ClaudeCode, Tool::Codex, Tool::Opencode]
+        .into_iter()
+        .map(|tool| {
+            let path = tool.config_path();
+            let (installed, wired) = match &path {
+                Some(p) if p.exists() => {
+                    let content = std::fs::read_to_string(p).unwrap_or_default();
+                    (true, crate::setup::wired(tool, &content))
+                }
+                _ => (false, false),
+            };
+            serde_json::json!({
+                "name": format!("{tool:?}"),
+                "config_path": path.map(|p| p.display().to_string()),
+                "installed": installed,
+                "wired": wired,
+            })
+        })
+        .collect();
+    axum::Json(serde_json::json!({ "tools": tools })).into_response()
 }
 
 /// The local status dashboard (`GET /` and `/dashboard`): live counters,
@@ -327,7 +567,7 @@ async fn handle_passthrough(
     let mut out_body = body.clone();
     if passthrough_should_mask(&path) {
         st.stats.record_request();
-        if st.fail_closed && !st.chain.ready() {
+        if pack_runtime_blocked(&st) {
             return Response::builder()
                 .status(503)
                 .body(Body::from(
@@ -358,7 +598,7 @@ async fn handle_passthrough(
                 session,
                 events,
                 latency_ms: 0,
-                packs: st.packs.clone(),
+                packs: st.runtime.read().unwrap().packs.clone(),
             };
             if let Err(e) = st.ledger.append(&entry) {
                 tracing::warn!("ledger append failed: {e}");
@@ -551,13 +791,22 @@ fn is_protocol_id_field(key: &str, owns_tool_id: bool) -> bool {
     }
 }
 
+/// True when failClosed is set for the active pack set and the detector chain
+/// (e.g. an NER model) isn't ready — masking can't be guaranteed, so the
+/// request must be refused rather than forwarded unmasked.
+pub(crate) fn pack_runtime_blocked(st: &AppState) -> bool {
+    let rt = st.runtime.read().unwrap();
+    rt.fail_closed && !rt.chain.ready()
+}
+
 pub(crate) fn mask_content(
     st: &AppState,
     session: &str,
     content: &str,
     events: &mut Vec<LedgerEvent>,
 ) -> Option<String> {
-    let spans = st.allowlist.filter(st.chain.detect(content));
+    let rt = st.runtime.read().unwrap();
+    let spans = rt.allowlist.filter(rt.chain.detect(content));
     if spans.is_empty() {
         return None;
     }
@@ -925,20 +1174,16 @@ mod tests {
                 .join(format!("deectx_test_ledger_{}.jsonl", std::process::id())),
             ..crate::config::Config::default()
         };
-        let packs = packs::load_active(&cfg);
-        let pack_names: Vec<String> = packs.iter().map(|p| p.name.clone()).collect();
-        let allowlist = crate::allowlist::Allowlist::new(packs::allow_entries(&cfg, &packs));
+        let runtime = build_pack_runtime(&cfg);
         AppState {
             upstream: cfg.upstream.clone(),
             anthropic_upstream: "https://api.anthropic.com".to_string(),
             upstream_responses: cfg.upstream_responses.clone(),
-            chain: packs::build_chain(&packs, cfg.ner, std::path::PathBuf::from("./models")),
+            runtime: RwLock::new(runtime),
             masker: std::sync::Arc::new(Masker::new()),
-            ledger: Ledger::new(cfg.ledger_path, cfg.ledger_retention_days).unwrap(),
+            ledger: Ledger::new(cfg.ledger_path.clone(), cfg.ledger_retention_days).unwrap(),
             http: reqwest::Client::new(),
-            packs: pack_names,
-            allowlist,
-            fail_closed: packs.iter().any(|p| p.settings.fail_closed),
+            cfg,
             stats: std::sync::Arc::new(LiveStats::new()),
         }
     }

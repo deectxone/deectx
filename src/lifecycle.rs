@@ -75,12 +75,19 @@ fn stop_running_proxy<P: ProcessManager>(pm: &P) {
     }
 }
 
-/// Ensure `<home>/config.toml` exists; write an empty file (all defaults) if not.
+/// Ensure `<home>/config.toml` exists; write a default file (GDPR + CDR-AU
+/// packs active, everything else defaulted) if not. A new install should
+/// mask both classes of regulated PII out of the box rather than leaving the
+/// dashboard's "Active packs" showing nothing but the bare `default` pack
+/// until the user finds `active_packs` in the docs.
 fn ensure_config() -> anyhow::Result<()> {
     crate::home::ensure_home()?;
     let path = crate::home::config_path();
     if !path.exists() {
-        std::fs::write(&path, "# deeCtx config — see ARCHITECTURE.md §11\n")?;
+        std::fs::write(
+            &path,
+            "# deeCtx config — see ARCHITECTURE.md §11\nactive_packs = [\"gdpr\", \"cdr-au\"]\n",
+        )?;
     }
     Ok(())
 }

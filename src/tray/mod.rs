@@ -37,7 +37,11 @@ pub(crate) fn toggle_label_for(state: &TrayState) -> &'static str {
 pub(crate) fn tooltip_for(state: &TrayState) -> String {
     match state {
         TrayState::Active => "deeCtx — masking active".to_string(),
-        TrayState::Stopped => "deeCtx — masking stopped".to_string(),
+        TrayState::Stopped => {
+            "deeCtx — masking stopped (restart any already-running AI CLI sessions, e.g. \
+             Claude Code, so they stop pointing at the now-closed proxy)"
+                .to_string()
+        }
         TrayState::Warning(w) => format!("deeCtx — stopped with a warning: {w}"),
     }
 }
