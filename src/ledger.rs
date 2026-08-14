@@ -312,7 +312,10 @@ mod tests {
             })
             .unwrap();
 
-        let rotated = dir.join(format!("ledger-{}.jsonl", local_date(yesterday).format("%Y-%m-%d")));
+        let rotated = dir.join(format!(
+            "ledger-{}.jsonl",
+            local_date(yesterday).format("%Y-%m-%d")
+        ));
         assert!(
             rotated.exists(),
             "yesterday entries must be rotated to a dated file"

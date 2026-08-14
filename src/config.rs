@@ -128,16 +128,32 @@ mod tests {
             "deectx_cfg_active_packs_{}.toml",
             std::process::id()
         ));
-        std::fs::write(&path, "listen = \"127.0.0.1:9\"\nactive_packs = [\"gdpr\"]\nner = true\n")
-            .unwrap();
+        std::fs::write(
+            &path,
+            "listen = \"127.0.0.1:9\"\nactive_packs = [\"gdpr\"]\nner = true\n",
+        )
+        .unwrap();
         write_active_packs(&path, &["gdpr".into(), "cdr-au".into()]).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("active_packs = [\"gdpr\", \"cdr-au\"]"));
-        assert!(text.contains("listen = \"127.0.0.1:9\""), "other keys must survive: {text}");
-        assert!(text.contains("ner = true"), "keys after active_packs must survive: {text}");
-        assert_eq!(text.matches("active_packs").count(), 1, "must not duplicate the line");
+        assert!(
+            text.contains("listen = \"127.0.0.1:9\""),
+            "other keys must survive: {text}"
+        );
+        assert!(
+            text.contains("ner = true"),
+            "keys after active_packs must survive: {text}"
+        );
+        assert_eq!(
+            text.matches("active_packs").count(),
+            1,
+            "must not duplicate the line"
+        );
         let cfg = Config::load(&path).unwrap();
-        assert_eq!(cfg.active_packs, vec!["gdpr".to_string(), "cdr-au".to_string()]);
+        assert_eq!(
+            cfg.active_packs,
+            vec!["gdpr".to_string(), "cdr-au".to_string()]
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
